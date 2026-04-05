@@ -137,19 +137,15 @@ function calcImportance(params: {
   minutes: number; starts: number; goals: number;
   yellows: number; reds: number; maxGames: number; ceiling: number;
 }): number {
-  const maxMins   = params.maxGames * 90;
-  const minutesN  = clamp01(params.minutes / Math.max(1, maxMins));
-  const startsN   = clamp01(params.starts  / Math.max(1, params.maxGames));
-  const goalsBoost  = clamp01(params.goals / 15) * 0.10;
+  const maxMins     = params.maxGames * 90;
+  const minutesN    = clamp01(params.minutes / Math.max(1, maxMins));
+  const startsN     = clamp01(params.starts  / Math.max(1, params.maxGames));
+  const goalsBoost  = clamp01(params.goals / 15) * 0.08;
   const cardPenalty = clamp01(params.yellows * 0.02 + params.reds * 0.08);
 
-  // Apply a participation curve — players below 50% starts get significantly less credit
-  const participationFactor = startsN < 0.5
-    ? startsN / 0.5 * 0.55   // below threshold: scale down sharply
-    : 0.55 + (startsN - 0.5) / 0.5 * 0.45; // above threshold: scale up to 1.0
-
-  const base = (minutesN * 0.35 + startsN * 0.60 + goalsBoost - cardPenalty) * participationFactor;
-  return Math.min(Math.max(0, Math.round(base * 100)), params.ceiling);
+  // Simple weighted blend — no participation curve multiplier
+  const raw = minutesN * 0.55 + startsN * 0.45 + goalsBoost - cardPenalty;
+  return Math.min(Math.max(0, Math.round(raw * params.ceiling)), params.ceiling);
 }
 
 function pickBestTier(rows: NormalizedSeasonRow[]): { tier: number | null; women: boolean } {
@@ -210,49 +206,71 @@ function evidenceScore(rows: NormalizedSeasonRow[], teamId?: string | null, comp
 }
 
 function pickPreferredRows(
-  rows: NormalizedSeasonRow[],
-  teamId: string | null | undefined,
-  compId: string | null | undefined,
-  matchGender: string | null | undefined,
-  matchTierHint?: number | null,
-): NormalizedSeasonRow[] {
-  if (!rows.length) return [];
+    rows: NormalizedSeasonRow[],
+    teamId: string | null | undefined,
+    compId: string | null | undefined,
+    matchGender: string | null | undefined,
+    matchTierHint?: number | null,
+  ): NormalizedSeasonRow[] {
+    if (!rows.length) return [];
 
-  // Gender filter
-  const genderRows = matchGender
-    ? rows.filter(r => {
-        if (!r.gender) return true;
-        const rg = r.gender.toLowerCase();
-        const mg = (matchGender ?? "").toLowerCase();
-        if (mg === "male")   return rg === "male"   || rg === "youth_male";
-        if (mg === "female") return rg === "female" || rg === "youth_female";
-        return true;
-      })
-    : rows;
+    const genderRows = matchGender
+      ? rows.filter(r => {
+          if (!r.gender) return true;
+          const rg = r.gender.toLowerCase();
+          const mg = (matchGender ?? "").toLowerCase();
+          if (mg === "male")   return rg === "male"   || rg === "youth_male";
+          if (mg === "female") return rg === "female" || rg === "youth_female";
+          return true;
+        })
+      : rows;
 
-  const source = genderRows.length > 0 ? genderRows : rows;
+    const source = genderRows.length > 0 ? genderRows : rows;
 
-  // Try team + comp match first
-  if (teamId && compId) {
-    const strict = source.filter(r => String(r.nff_team_id ?? "") === String(teamId) && String(r.nff_competition_id ?? "") === String(compId));
-    if (strict.length > 0) return strict.sort((a, b) => b.minutes - a.minutes);
+    // Helper: given a set of rows for the same team, keep only the tier
+    // where the player has the most minutes (their primary role)
+    function keepPrimaryTier(teamRows: NormalizedSeasonRow[]): NormalizedSeasonRow[] {
+      const minutesByTier = new Map<number, number>();
+      for (const r of teamRows) {
+        const t = r.tier ?? 99;
+        minutesByTier.set(t, (minutesByTier.get(t) ?? 0) + r.minutes);
+      }
+      const primaryTier = Array.from(minutesByTier.entries())
+        .sort((a, b) => b[1] - a[1])[0]?.[0] ?? 99;
+      return teamRows.filter(r => (r.tier ?? 99) === primaryTier);
+    }
+
+    // Remove the compId strict branch entirely, rely on tier instead
+    if (teamId && matchTierHint) {
+      const tierRows = source.filter(r =>
+        String(r.nff_team_id ?? "") === String(teamId) && r.tier === matchTierHint
+      );
+      if (tierRows.length > 0) return keepPrimaryTier(tierRows).sort((a, b) => b.minutes - a.minutes);
+    }
+
+    if (teamId) {
+      const teamRows = source.filter(r => String(r.nff_team_id ?? "") === String(teamId));
+      if (teamRows.length > 0) return keepPrimaryTier(teamRows).sort((a, b) => b.minutes - a.minutes);
+    }
+
+    // No team match — group by team+tier, pick the group with most total minutes
+    const groupMap = new Map<string, NormalizedSeasonRow[]>();
+    for (const r of source) {
+      const key = `${r.nff_team_id ?? "x"}_${r.tier ?? 99}`;
+      const arr = groupMap.get(key) ?? [];
+      arr.push(r);
+      groupMap.set(key, arr);
+    }
+
+    const bestGroup = Array.from(groupMap.values())
+      .sort((a, b) => {
+        const minsA = a.reduce((s, r) => s + r.minutes, 0);
+        const minsB = b.reduce((s, r) => s + r.minutes, 0);
+        return minsB - minsA;
+      })[0] ?? source;
+
+    return bestGroup.sort((a, b) => b.minutes - a.minutes);
   }
-
-  // Try team + tier match (for clubs where multiple teams share same nff_team_id)
-  if (teamId && matchTierHint) {
-    const tierRows = source.filter(r =>
-      String(r.nff_team_id ?? "") === String(teamId) && r.tier === matchTierHint
-    );
-    if (tierRows.length > 0) return tierRows.sort((a, b) => b.minutes - a.minutes);
-  }
-
-  // Try team match
-  if (teamId) {
-    const teamRows = source.filter(r => String(r.nff_team_id ?? "") === String(teamId));
-    if (teamRows.length > 0) return teamRows.sort((a, b) => b.minutes - a.minutes);
-  }
-  return source.sort((a, b) => b.minutes - a.minutes);
-}
 
 // ── Team strength from computed_league_table ───────────────────────────────
 
@@ -274,12 +292,20 @@ function strengthFromTableRow(row: TableRow | null, women: boolean): {
 }
 
 function blendStrength(cur: number, prev: number, played: number, tier: number | null): number {
+  const TIER_PRIOR: Record<number, number> = { 1: 0.52, 2: 0.38, 3: 0.26, 4: 0.16, 5: 0.10 };
+  const prior = TIER_PRIOR[tier ?? 3] ?? 0.22;
+  
   const w = clamp01(played / 8);
-  const blended = w * cur + (1 - w) * prev;
-  const FLOORS:    Record<number, number> = { 1: 0.55, 2: 0.35, 3: 0.20, 4: 0.12, 5: 0.06 };
-  const CEILINGS:  Record<number, number> = { 1: 1.00, 2: 0.54, 3: 0.34, 4: 0.19, 5: 0.11 };
+  // When few games played, blend prev with tier prior rather than using prev raw
+  const prevWeight = clamp01(1 - played / 4);
+  const adjustedPrev = prev * (1 - prevWeight * 0.4) + prior * prevWeight * 0.4;
+  
+  const blended = w * cur + (1 - w) * adjustedPrev;
+  
+  const FLOORS:   Record<number, number> = { 1: 0.35, 2: 0.25, 3: 0.15, 4: 0.10, 5: 0.06 };
+  const CEILINGS: Record<number, number> = { 1: 1.00, 2: 0.54, 3: 0.34, 4: 0.19, 5: 0.11 };
   const t       = tier ?? 3;
-  const floor   = (FLOORS[t] ?? 0.04) * Math.max(0, 1 - played / 8);
+  const floor   = FLOORS[t] ?? 0.04;
   const ceiling = CEILINGS[t] ?? 1.0;
   return clamp01(Math.max(Math.min(blended, ceiling), floor));
 }
@@ -858,11 +884,14 @@ export async function GET(req: Request) {
       }
 
       const seasons = Array.from(seasonMap.entries())
-        .sort(([ka], [kb]) => {
-          const [ya, , ta] = ka.split("_");
-          const [yb, , tb] = kb.split("_");
+        .sort(([ka, rowsA], [kb, rowsB]) => {
+          const [ya] = ka.split("_");
+          const [yb] = kb.split("_");
           if (yb !== ya) return parseInt(yb) - parseInt(ya);
-          return parseInt(ta || "99") - parseInt(tb || "99"); // lower tier number = higher level
+          // Within same year, sort by total minutes descending (primary role first)
+          const minsA = rowsA.reduce((s, r) => s + r.minutes, 0);
+          const minsB = rowsB.reduce((s, r) => s + r.minutes, 0);
+          return minsB - minsA;
         })
         .slice(0, 5)
         .map(([, rows]) => {
