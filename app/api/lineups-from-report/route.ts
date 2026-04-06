@@ -158,6 +158,22 @@ export async function GET(req: Request) {
     const resolvedHomeId = resolveId(homeClubId, matchRow?.home_team_nff_id ? String(matchRow.home_team_nff_id) : null);
     const resolvedAwayId = resolveId(awayClubId, matchRow?.away_team_nff_id ? String(matchRow.away_team_nff_id) : null);
 
+    const teamNameMap = new Map<string, string>();
+    if (resolvedHomeId || resolvedAwayId) {
+      const ids = [resolvedHomeId, resolvedAwayId].filter(Boolean) as string[];
+      const { data: teamRows } = await supabaseAdmin
+        .from("computed_league_table")
+        .select("nff_team_id, team_name")
+        .in("nff_team_id", ids)
+        .limit(10);
+      for (const r of teamRows ?? []) {
+        if (r.nff_team_id && r.team_name) teamNameMap.set(String(r.nff_team_id), r.team_name);
+      }
+    }
+
+    const resolvedHomeName = (resolvedHomeId && teamNameMap.get(resolvedHomeId)) ?? homeName;
+    const resolvedAwayName = (resolvedAwayId && teamNameMap.get(resolvedAwayId)) ?? awayName;
+
     const home = {
       starters: homePlayers.filter(p => p.role === "starter"),
       bench:    homePlayers.filter(p => p.role === "substitute"),
@@ -178,8 +194,8 @@ export async function GET(req: Request) {
         benchAway:    away.bench.length,
       },
       teams: {
-        home: { nff_team_id: resolvedHomeId, team_name: homeName },
-        away: { nff_team_id: resolvedAwayId, team_name: awayName },
+        home: { nff_team_id: resolvedHomeId, team_name: resolvedHomeName },
+        away: { nff_team_id: resolvedAwayId, team_name: resolvedAwayName },
       },
       match: {
         nff_match_id:    fiksId,
