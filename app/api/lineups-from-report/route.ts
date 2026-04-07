@@ -147,7 +147,7 @@ export async function GET(req: Request) {
     if (matchRow?.nff_competition_id) {
       const { data: compRow } = await supabaseAdmin
         .from("competitions")
-        .select("tier, gender, name")
+        .select("nff_competition_id, tier, gender, name")
         .eq("nff_competition_id", matchRow.nff_competition_id)
         .maybeSingle();
       competition = compRow ?? null;

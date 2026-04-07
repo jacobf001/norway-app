@@ -87,6 +87,14 @@ function normalizeSeasonRows(rows: any[]): NormalizedSeasonRow[] {
   }));
 }
 
+function cleanTeamName(name: string | null, tier: number | null): string | null {
+  if (!name) return null;
+  if (tier != null && tier <= 2 && name.endsWith(" 2")) {
+    return name.slice(0, -2).trim();
+  }
+  return name;
+}
+
 // ── Tier / quality helpers ─────────────────────────────────────────────────
 
 function isWomenGender(gender: string | null | undefined): boolean {
@@ -189,6 +197,7 @@ function calcWeightedImportance(rows: NormalizedSeasonRow[], seasonYearCtx: numb
   return { importance: Math.min(importance, ceiling), ceiling, tier, women };
 }
 
+
 // ── Evidence scoring — how well do we know this player at this team/tier? ──
 
 function evidenceScore(rows: NormalizedSeasonRow[], teamId?: string | null, compId?: string | null): number {
@@ -272,6 +281,8 @@ function pickPreferredRows(
     return bestGroup.sort((a, b) => b.minutes - a.minutes);
   }
 
+  
+
 // ── Team strength from computed_league_table ───────────────────────────────
 
 function strengthFromTableRow(row: TableRow | null, women: boolean): {
@@ -310,14 +321,38 @@ function blendStrength(cur: number, prev: number, played: number, tier: number |
   return clamp01(Math.max(Math.min(blended, ceiling), floor));
 }
 
-function bestTableRow(rows: TableRow[], teamId: string | null): TableRow | null {
+function bestTableRow(rows: TableRow[], teamId: string | null, preferCompId?: string | null, preferTier?: number | null): TableRow | null {
   if (!teamId || !rows.length) return null;
   const teamRows = rows.filter(r => String(r.nff_team_id) === String(teamId));
   if (!teamRows.length) return null;
-  // Prefer non-youth, most played
-  const leagueRows = teamRows.filter(r => (r.tier ?? 99) < 9);
+  const leagueRows = teamRows.filter(r => (r.tier ?? 99) < 9 && r.gender !== "Youth_Male" && r.gender !== "Youth_Female");
   const source = leagueRows.length > 0 ? leagueRows : teamRows;
+  if (preferCompId) {
+    const compMatch = source.find(r => r.nff_competition_id === preferCompId);
+    if (compMatch) return compMatch;
+  }
+  if (preferTier) {
+    const tierMatch = source.find(r => r.tier === preferTier);
+    if (tierMatch) return tierMatch;
+  }
   return source.reduce((best, r) => !best || Number(r.played) > Number(best.played) ? r : best, null as TableRow | null);
+}
+
+function inferMatchTier(
+  homeTeamId: string | null,
+  awayTeamId: string | null,
+  curSeasonRows: NormalizedSeasonRow[]
+): number | null {
+  const tiers: number[] = [];
+  for (const r of curSeasonRows) {
+    if (r.tier && r.tier < 9 && (r.nff_team_id === homeTeamId || r.nff_team_id === awayTeamId)) {
+      tiers.push(r.tier);
+    }
+  }
+  if (!tiers.length) return null;
+  const counts = new Map<number, number>();
+  for (const t of tiers) counts.set(t, (counts.get(t) ?? 0) + 1);
+  return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0][0];
 }
 
 // ── Side rating ────────────────────────────────────────────────────────────
@@ -718,6 +753,8 @@ export async function GET(req: Request) {
     const curTableRows  = (curTableRaw  ?? []) as unknown as TableRow[];
     const prevTableRows = (prevTableRaw ?? []) as unknown as TableRow[];
 
+    const inferredTier = matchTier ?? inferMatchTier(homeTeamId, awayTeamId, curSeasonRows);
+
     // Build a position lookup keyed by team+year+competition
     const positionMap = new Map<string, { position: number | null; competition_name: string | null }>();
     for (const r of [...(curTableRaw ?? []), ...(prevTableRaw ?? []), ...(allCurTableRaw ?? []), ...(allPrevTableRaw ?? [])]) {
@@ -731,10 +768,11 @@ export async function GET(req: Request) {
       if (!positionMap.has(fallbackKey)) positionMap.set(fallbackKey, val);
     }
 
-    const homeCurTable  = bestTableRow(curTableRows,  homeTeamId);
-    const awayCurTable  = bestTableRow(curTableRows,  awayTeamId);
-    const homePrevTable = bestTableRow(prevTableRows, homeTeamId);
-    const awayPrevTable = bestTableRow(prevTableRows, awayTeamId);
+    const compId = matchComp?.nff_competition_id ?? null;
+    const homeCurTable  = bestTableRow(curTableRows,  homeTeamId, compId, inferredTier);
+    const awayCurTable  = bestTableRow(curTableRows,  awayTeamId, compId, inferredTier);
+    const homePrevTable = bestTableRow(prevTableRows, homeTeamId, compId, inferredTier);
+    const awayPrevTable = bestTableRow(prevTableRows, awayTeamId, compId, inferredTier);
 
     // Infer gender from table rows if matchGender is null
     const inferredGender = matchGender
@@ -751,8 +789,8 @@ export async function GET(req: Request) {
     const homePrevStr = strengthFromTableRow(homePrevTable, effectiveIsWomen);
     const awayPrevStr = strengthFromTableRow(awayPrevTable, effectiveIsWomen);
 
-    const homeTier = matchTier ?? homeCurStr.tier ?? homePrevStr.tier ?? 3;
-    const awayTier = matchTier ?? awayCurStr.tier ?? awayPrevStr.tier ?? 3;
+    const homeTier = inferredTier ?? homeCurStr.tier ?? homePrevStr.tier ?? 3;
+    const awayTier = inferredTier ?? awayCurStr.tier ?? awayPrevStr.tier ?? 3;
 
     console.log("DEBUG tiers:", {
       matchTier,
@@ -780,15 +818,28 @@ export async function GET(req: Request) {
       const chosenCurRows  = pickPreferredRows(curRows,  sideTeamId, sideCompId, effectiveGender, sideTier);
       const chosenPrevRows = pickPreferredRows(prevRows, sideTeamId, sideCompId, effectiveGender, sideTier);
 
-      const broadCurRows   = pickPreferredRows(curRows,  null, null, effectiveGender);
+      const broadCurRows = curRows.filter(r => {
+        if (!effectiveGender) return true;
+        const rg = (r.gender ?? "").toLowerCase();
+        const mg = effectiveGender.toLowerCase();
+        if (mg === "male") return rg === "male" || rg === "youth_male" || rg === "";
+        if (mg === "female") return rg === "female" || rg === "youth_female";
+        return true;
+      });
+
       const broadPrevRows  = pickPreferredRows(prevRows, null, null, effectiveGender);
 
       // Always use team-specific rows for importance calculation
       // Only fall back to broad if there are genuinely no team rows at all
-      const calcCurRows  = chosenCurRows.length  > 0 ? chosenCurRows  : broadCurRows;
+      const broadBestTier = broadCurRows.length > 0 ? Math.min(...broadCurRows.map(r => r.tier ?? 99)) : 99;
+      const chosenBestTier = chosenCurRows.length > 0 ? Math.min(...chosenCurRows.map(r => r.tier ?? 99)) : 99;
+      const calcCurRows = (broadBestTier < chosenBestTier && broadBestTier < sideTier) ? broadCurRows : (chosenCurRows.length > 0 ? chosenCurRows : broadCurRows);
       const calcPrevRows = chosenPrevRows.length > 0 ? chosenPrevRows : broadPrevRows;
 
-      const currResult = calcCurRows.length  > 0 ? calcWeightedImportance(calcCurRows,  seasonYear) : null;
+      const higherTierRows = broadCurRows.filter(r => (r.tier ?? 99) < sideTier);
+      const currResult = higherTierRows.length > 0 
+        ? calcWeightedImportance(higherTierRows, seasonYear) 
+        : calcWeightedImportance(calcCurRows, seasonYear);
       const prevResult = calcPrevRows.length > 0 ? calcWeightedImportance(calcPrevRows, prevSeasonYear) : null;
 
       let importance        = 0;
@@ -839,28 +890,28 @@ export async function GET(req: Request) {
 
         if (playerHighestTier < 99) {
           if (playerHighestTier < sideTier) {
-            // Player proven at a stronger tier — only raise ceiling if that was recent
             const higherTierEvidence = tierRowsForCap
-              .filter(r => (r.tier ?? 99) <= playerHighestTier)
+              .filter(r => (r.tier ?? 99) < sideTier)
               .reduce((s, r) => s + r.minutes + r.starts * 90, 0);
-            const higherTierRecentEvidence = [...calcCurRows]
-              .filter(r => (r.tier ?? 99) <= playerHighestTier)
+            const higherTierRecentEvidence = [...broadCurRows]
+              .filter(r => (r.tier ?? 99) < sideTier)
               .reduce((s, r) => s + r.minutes + r.starts * 90, 0);
+            const recentActiveTier = [...broadCurRows]
+              .filter(r => (r.tier ?? 99) < sideTier)
+              .sort((a, b) => (a.tier ?? 99) - (b.tier ?? 99))[0]?.tier ?? playerHighestTier;
 
             if (higherTierRecentEvidence >= 900) {
-              // Currently playing at higher tier — full raise
-              effectiveCeiling = Math.max(sideCeiling, tierBaseCeiling(playerHighestTier, effectiveIsWomen));
+              effectiveCeiling = Math.max(sideCeiling, tierBaseCeiling(recentActiveTier, effectiveIsWomen));
+              const boostRatio = sideCeiling / tierBaseCeiling(recentActiveTier, effectiveIsWomen);
+              importance = Math.min(Math.round(importance / boostRatio), effectiveCeiling);
             } else if (higherTierEvidence >= 1800) {
-              // Was a solid higher-tier player previously — modest raise
               effectiveCeiling = Math.max(sideCeiling, Math.round(tierBaseCeiling(playerHighestTier, effectiveIsWomen) * 0.7));
             } else {
-              // Limited higher-tier history — cap at sideCeiling
               effectiveCeiling = sideCeiling;
             }
           } else if (playerHighestTier === sideTier) {
             effectiveCeiling = Math.min(sideCeiling, importanceCeiling);
           } else {
-            // Player's best tier is lower — restrict ceiling
             effectiveCeiling = Math.min(
               sideCeiling,
               tierBaseCeiling(playerHighestTier, effectiveIsWomen)
@@ -932,12 +983,10 @@ export async function GET(req: Request) {
           return {
             season_year:  best.season_year,
             nff_team_id:  best.nff_team_id,
-            team_name:    (() => {
-              const raw = best.team_name ?? (best.nff_team_id ? teamNameById.get(best.nff_team_id) ?? null : null);
-              if (best.nff_team_id === homeTeamId) return teams.home.team_name ?? raw;
-              if (best.nff_team_id === awayTeamId) return teams.away.team_name ?? raw;
-              return raw;
-            })(),
+            team_name: cleanTeamName(
+              best.team_name ?? (best.nff_team_id ? teamNameById.get(best.nff_team_id) ?? null : null),
+              imp.tier
+            ),
             appearances:  rows.reduce((s, r) => s + r.appearances, 0),
             starts:       rows.reduce((s, r) => s + r.starts, 0),
             minutes:      rows.reduce((s, r) => s + r.minutes, 0),

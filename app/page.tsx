@@ -73,6 +73,13 @@ export default function HomePage() {
     }
   }
 
+  function tierBaseCeiling(tier: number | null): number {
+    if (!tier) return 64;
+    if (tier <= 1) return 92; if (tier === 2) return 78;
+    if (tier === 3) return 64; if (tier === 4) return 55;
+    if (tier === 5) return 45; if (tier === 6) return 36; return 28;
+  }
+
   return (
     <main className="min-h-screen bg-[#0a0a0c] text-white">
       <div className="border-b border-white/5 bg-black/40">
@@ -118,12 +125,10 @@ export default function HomePage() {
               </div>
             )}
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <PlayerAnalysisTable title={`${analysis.teams?.home?.team_name ?? "Home"} starters`} rows={analysis.home?.starters ?? []} accent="blue" />
-              <PlayerAnalysisTable title={`${analysis.teams?.away?.team_name ?? "Away"} starters`} rows={analysis.away?.starters ?? []} accent="orange" />
-            </div>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <PlayerAnalysisTable title={`${analysis.teams?.home?.team_name ?? "Home"} bench`} rows={analysis.home?.bench ?? []} accent="blue" />
-              <PlayerAnalysisTable title={`${analysis.teams?.away?.team_name ?? "Away"} bench`} rows={analysis.away?.bench ?? []} accent="orange" />
+              <PlayerAnalysisTable title={`${analysis.teams?.home?.team_name ?? "Home"} starters`} rows={analysis.home?.starters ?? []} accent="blue" tierCeiling={tierBaseCeiling(analysis.teamStrengthDebug?.home?.tier)} />
+              <PlayerAnalysisTable title={`${analysis.teams?.away?.team_name ?? "Away"} starters`} rows={analysis.away?.starters ?? []} accent="orange" tierCeiling={tierBaseCeiling(analysis.teamStrengthDebug?.away?.tier)} />
+              <PlayerAnalysisTable title={`${analysis.teams?.home?.team_name ?? "Home"} bench`} rows={analysis.home?.bench ?? []} accent="blue" tierCeiling={tierBaseCeiling(analysis.teamStrengthDebug?.home?.tier)} />
+              <PlayerAnalysisTable title={`${analysis.teams?.away?.team_name ?? "Away"} bench`} rows={analysis.away?.bench ?? []} accent="orange" tierCeiling={tierBaseCeiling(analysis.teamStrengthDebug?.away?.tier)} />
             </div>
           </div>
         )}
@@ -312,7 +317,7 @@ function MissingLikelyXI({ title, items, accent }: {
   );
 }
 
-function PlayerAnalysisTable({ title, rows, accent }: { title: string; rows: any[]; accent: "blue" | "orange" }) {
+function PlayerAnalysisTable({ title, rows, accent, tierCeiling }: { title: string; rows: any[]; accent: "blue" | "orange"; tierCeiling: number }) {
   const [expanded, setExpanded] = useState<string[]>([]);
   function toggle(id: string) { setExpanded(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]); }
 
@@ -339,7 +344,7 @@ function PlayerAnalysisTable({ title, rows, accent }: { title: string; rows: any
               const isOpen = expanded.includes(p.nff_player_id);
               const imp = p.importance ?? 0;
               const ceil = p.importanceCeiling ?? 100;
-              const ratio = ceil > 0 ? imp / ceil : 0;
+              const ratio = tierCeiling > 0 ? imp / tierCeiling : 0;
               const impColor = imp === 0 ? "text-white/30" : ratio >= 0.8 ? "text-emerald-400" : ratio >= 0.6 ? "text-sky-400" : ratio >= 0.4 ? "text-yellow-400" : "text-white/50";
               const rowHL = imp === 0 ? "" : ratio >= 0.8 ? "border-l-2 border-l-emerald-500 bg-emerald-950/20" : ratio >= 0.6 ? "border-l-2 border-l-sky-500/40 bg-sky-950/10" : ratio >= 0.4 ? "border-l-2 border-l-yellow-500/50 bg-yellow-950/10" : "";
               return (
