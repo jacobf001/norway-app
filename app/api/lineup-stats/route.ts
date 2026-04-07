@@ -347,13 +347,21 @@ function sideRating(side: { starters: any[]; bench: any[] }, strength: number, m
   const coverage = side.starters.length ? startersKnown / side.starters.length : 0;
   const effectiveWithPenalty = effectiveStr * (1 - untrackedPen * 0.7);
 
+  // Don't let lineup scores inflate effectiveStrength beyond the team's historical strength
+  // Use team strength as an anchor — lineup can only move it by ±40%
+  const anchoredStr = clamp(
+    effectiveWithPenalty,
+    strength * 0.6,
+    strength * 1.4
+  );
+
   return {
     starters: Math.round(starterSum),
     bench:    Math.round(benchSum),
     raw:      Math.round(raw),
     total:    Math.round(scaled),
     coverage,
-    effectiveStrength: Math.max(effectiveWithPenalty, strength * 0.3),
+    effectiveStrength: Math.max(anchoredStr, strength * 0.3),
   };
 }
 
@@ -381,35 +389,46 @@ function computeOdds(params: {
   homeLineupTotal: number; awayLineupTotal: number;
   women: boolean;
 }) {
-  function lineupBaseline(tier: number, women: boolean) {
-    if (women) {
-      if (tier <= 1) return 470; if (tier === 2) return 380;
-      if (tier === 3) return 300; return 220;
-    }
-    if (tier <= 1) return 520; if (tier === 2) return 430;
-    if (tier === 3) return 340; if (tier === 4) return 260;
-    if (tier === 5) return 210; return 170;
-  }
+  const homeCeilingAvg = params.homeTier <= 1 ? 92 : params.homeTier === 2 ? 78 : params.homeTier === 3 ? 64 : params.homeTier === 4 ? 55 : 45;
+  const awayCeilingAvg = params.awayTier <= 1 ? 92 : params.awayTier === 2 ? 78 : params.awayTier === 3 ? 64 : params.awayTier === 4 ? 55 : 45;
 
-  const homeRatio = clamp(params.homeLineupTotal / lineupBaseline(params.homeTier, params.women), 0, 1.6);
-  const awayRatio = clamp(params.awayLineupTotal / lineupBaseline(params.awayTier, params.women), 0, 1.6);
-  const lineupZ   = (homeRatio - awayRatio) * 4.0 * 0.8;
+  const tierQualityHome = params.homeTier <= 1 ? 1.0 : params.homeTier === 2 ? 0.78 : params.homeTier === 3 ? 0.58 : params.homeTier === 4 ? 0.43 : 0.32;
+  const tierQualityAway = params.awayTier <= 1 ? 1.0 : params.awayTier === 2 ? 0.78 : params.awayTier === 3 ? 0.58 : params.awayTier === 4 ? 0.43 : 0.32;
+
+  const homeRatio = clamp(params.homeLineupTotal / (homeCeilingAvg * 11), 0, 1.6) * tierQualityHome;
+  const awayRatio = clamp(params.awayLineupTotal / (awayCeilingAvg * 11), 0, 1.6) * tierQualityAway;
+  const lineupZ = (homeRatio - awayRatio) * 2.0;
   const strengthZ = clamp(params.homeStrength - params.awayStrength, -1, 1) * 1.2;
 
-  const MISS_CEILINGS: Record<number, number> = { 1: 92, 2: 78, 3: 64, 4: 50, 5: 36, 6: 28 };
+  const MISS_CEILINGS: Record<number, number> = { 1: 92, 2: 78, 3: 64, 4: 55, 5: 45, 6: 36 };
   const homeMissN  = clamp(params.homeMissingImpact / ((MISS_CEILINGS[params.homeTier] ?? 50) * 4), 0, 1);
   const awayMissN  = clamp(params.awayMissingImpact / ((MISS_CEILINGS[params.awayTier] ?? 50) * 4), 0, 1);
-  const missingAdj = clamp((awayMissN - homeMissN) * 2.2, -1.5, 1.5) * 0.85;
+  const missingAdj = clamp((awayMissN - homeMissN) * 1.2, -1.0, 1.0) * 0.7;
 
   const playedWeight = clamp01(Math.min(params.homePlayed, params.awayPlayed) / 6);
   const posGap  = (params.awayPosition ?? 6) - (params.homePosition ?? 6);
-  const posZ    = clamp(posGap * 0.10, -0.7, 0.7) * playedWeight;
-  const tierAdv = clamp((params.awayTier - params.homeTier) * 0.25, -0.7, 0.7);
+  const tiersSame = params.homeTier === params.awayTier;
+  const posZ    = tiersSame ? clamp(posGap * 0.10, -0.7, 0.7) * playedWeight : 0;
+  const tierGap = params.awayTier - params.homeTier;
+  const tierAdv = clamp(tierGap * 0.45, -1.2, 1.2);
   const homeAdv = 0.16;
 
   const homeMissingGoalsZ = clamp((params.homeMissingGoals ?? 0) * 0.55, 0, 1.0);
   const awayMissingGoalsZ = clamp((params.awayMissingGoals ?? 0) * 0.55, 0, 1.0);
   const missingGoalsAdj   = awayMissingGoalsZ - homeMissingGoalsZ;
+
+  console.log("DEBUG z components:", {
+    lineupZ,
+    strengthZ,
+    tierAdv,
+    posZ,
+    missingAdj,
+    homeAdv,
+    homeMissN,
+    awayMissN,
+    homeMissingImpact: params.homeMissingImpact,
+    awayMissingImpact: params.awayMissingImpact,
+  });
 
   const z       = lineupZ + missingAdj + missingGoalsAdj + strengthZ + posZ + tierAdv + homeAdv;
   const pHomeR  = sigmoid(z);
@@ -735,6 +754,15 @@ export async function GET(req: Request) {
     const homeTier = matchTier ?? homeCurStr.tier ?? homePrevStr.tier ?? 3;
     const awayTier = matchTier ?? awayCurStr.tier ?? awayPrevStr.tier ?? 3;
 
+    console.log("DEBUG tiers:", {
+      matchTier,
+      homeTier,
+      awayTier,
+      homeCurTable: homeCurTable?.tier,
+      awayCurTable: awayCurTable?.tier,
+      competition: matchComp,
+    });
+
     const homeStrength = blendStrength(homeCurStr.strength, homePrevStr.strength, homeCurStr.played, homeTier);
     const awayStrength = blendStrength(awayCurStr.strength, awayPrevStr.strength, awayCurStr.played, awayTier);
 
@@ -861,7 +889,7 @@ export async function GET(req: Request) {
             .sort((a, b) => b.minutes - a.minutes)[0]?.nff_team_id ?? null;
           const prevPosData = prevTeamId ? positionMap.get(`${prevTeamId}_${prevSeasonYear}`) ?? positionMap.get(`${prevTeamId}_${seasonYear}`) : null;
           const prevPos = prevPosData?.position ?? null;
-          if (sidePosition && prevPos && prevPos > sidePosition + 3) {
+          if (sidePosition && prevPos && prevPos < sidePosition + 3) {
             // Coming from a meaningfully lower-ranked club — discount
             const posGap = prevPos - sidePosition;
             const posDiscount = posGap >= 8 ? 0.55 : posGap >= 6 ? 0.65 : posGap >= 4 ? 0.75 : 0.85;
@@ -904,7 +932,12 @@ export async function GET(req: Request) {
           return {
             season_year:  best.season_year,
             nff_team_id:  best.nff_team_id,
-            team_name:    best.team_name ?? (best.nff_team_id ? teamNameById.get(best.nff_team_id) ?? null : null),
+            team_name:    (() => {
+              const raw = best.team_name ?? (best.nff_team_id ? teamNameById.get(best.nff_team_id) ?? null : null);
+              if (best.nff_team_id === homeTeamId) return teams.home.team_name ?? raw;
+              if (best.nff_team_id === awayTeamId) return teams.away.team_name ?? raw;
+              return raw;
+            })(),
             appearances:  rows.reduce((s, r) => s + r.appearances, 0),
             starts:       rows.reduce((s, r) => s + r.starts, 0),
             minutes:      rows.reduce((s, r) => s + r.minutes, 0),
@@ -1019,6 +1052,15 @@ export async function GET(req: Request) {
     };
     const homeMissingGoals = missingGoalsPerGame(homeMissing.missing, homeTier);
     const awayMissingGoals = missingGoalsPerGame(awayMissing.missing, awayTier);
+
+    console.log("DEBUG ratings:", {
+      homeLineupTotal: homeRating.total,
+      awayLineupTotal: awayRating.total,
+      homeEffStr: homeRating.effectiveStrength,
+      awayEffStr: awayRating.effectiveStrength,
+      homeStrength,
+      awayStrength,
+    });
 
     const pricing = computeOdds({
       homeTier, awayTier,

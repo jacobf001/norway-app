@@ -45,6 +45,15 @@ function extractTeamNames(html: string): [string | null, string | null] {
   return [home, away];
 }
 
+function extractTeamNamesWithIds(html: string): Array<{ name: string; clubId: string | null }> {
+  const matches = [...html.matchAll(/<div class="teamName">\s*([^<]+?)\s*<\/div>/g)];
+  const logos = [...html.matchAll(/clublogos\/(\d+)\.png/g)];
+  return matches.map((m, i) => ({
+    name: decodeHtmlEntities(m[1]),
+    clubId: logos[i]?.[1] ?? null,
+  }));
+}
+
 function extractClubIds(html: string): [string | null, string | null] {
   const matches = [...html.matchAll(/clublogos\/(\d+)\.png/g)];
   return [matches[0]?.[1] ?? null, matches[1]?.[1] ?? null];
@@ -171,8 +180,15 @@ export async function GET(req: Request) {
       }
     }
 
-    const resolvedHomeName = (resolvedHomeId && teamNameMap.get(resolvedHomeId)) ?? homeName;
-    const resolvedAwayName = (resolvedAwayId && teamNameMap.get(resolvedAwayId)) ?? awayName;
+    const teamsFromHtml = extractTeamNamesWithIds(html);
+
+    // Match scraped names to resolved IDs by club logo
+    const homeNameFromHtml = teamsFromHtml.find(t => t.clubId === homeClubId)?.name ?? homeName;
+    const awayNameFromHtml = teamsFromHtml.find(t => t.clubId === awayClubId)?.name ?? awayName;
+
+    // Use HTML names (correct display names) with DB-resolved IDs (correct home/away)
+    const resolvedHomeName = homeNameFromHtml;
+    const resolvedAwayName = awayNameFromHtml;
 
     const home = {
       starters: homePlayers.filter(p => p.role === "starter"),
