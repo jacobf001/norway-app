@@ -180,13 +180,11 @@ export async function GET(req: Request) {
       }
     }
 
+    // Match scraped names to IDs by club logo position
     const teamsFromHtml = extractTeamNamesWithIds(html);
-
-    // Match scraped names to resolved IDs by club logo
     const homeNameFromHtml = teamsFromHtml.find(t => t.clubId === homeClubId)?.name ?? homeName;
     const awayNameFromHtml = teamsFromHtml.find(t => t.clubId === awayClubId)?.name ?? awayName;
 
-    // Use HTML names (correct display names) with DB-resolved IDs (correct home/away)
     const resolvedHomeName = homeNameFromHtml;
     const resolvedAwayName = awayNameFromHtml;
 
@@ -198,6 +196,8 @@ export async function GET(req: Request) {
       starters: awayPlayers.filter(p => p.role === "starter"),
       bench:    awayPlayers.filter(p => p.role === "substitute"),
     };
+
+    console.log("DEBUG ids:", { homeClubId, awayClubId, resolvedHomeId, resolvedAwayId, homeName, awayName });
 
     return NextResponse.json({
       fiksId,
