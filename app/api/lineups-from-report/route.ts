@@ -54,6 +54,11 @@ function extractTeamNamesWithIds(html: string): Array<{ name: string; clubId: st
   }));
 }
 
+function extractCompetitionName(html: string): string | null {
+  const m = html.match(/Turnering:\s*<\/span>\s*<a[^>]*>([^<]+)<\/a>/);
+  return m ? decodeHtmlEntities(m[1]) : null;
+}
+
 function extractClubIds(html: string): [string | null, string | null] {
   const matches = [...html.matchAll(/clublogos\/(\d+)\.png/g)];
   return [matches[0]?.[1] ?? null, matches[1]?.[1] ?? null];
@@ -130,6 +135,9 @@ export async function GET(req: Request) {
     const matchUrl = `https://www.fotball.no/fotballdata/kamp/?fiksId=${fiksId}`;
     const html = await fetchHtml(matchUrl);
 
+    const turneringIdx = html.indexOf("Turnering");
+    console.log("DEBUG turnering HTML:", html.substring(turneringIdx, turneringIdx + 300));
+
     const [homeName, awayName] = extractTeamNames(html);
     const [homeClubId, awayClubId] = extractClubIds(html);
     const score = extractScore(html);
@@ -153,8 +161,55 @@ export async function GET(req: Request) {
       competition = compRow ?? null;
     }
 
+    // If no competition from DB, try scraping it from the match page HTML
+    if (!competition) {
+      const scrapedCompName = extractCompetitionName(html);
+      if (scrapedCompName) {
+        const { data: compByName } = await supabaseAdmin
+          .from("competitions")
+          .select("nff_competition_id, tier, gender, name")
+          .ilike("name", `%${scrapedCompName}%`)
+          .order("season_year", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (compByName) {
+          competition = compByName;
+        } else {
+          // Not in DB — try to infer from competition name (youth/cup)
+          const youthMaleMatch = scrapedCompName.match(/G(\d+)/i);
+          const youthFemaleMatch = scrapedCompName.match(/J(\d+)/i);
+          if (youthMaleMatch || youthFemaleMatch) {
+            const age = parseInt((youthMaleMatch ?? youthFemaleMatch)![1]);
+            competition = {
+              nff_competition_id: null,
+              name: scrapedCompName,
+              gender: youthMaleMatch ? "Youth_Male" : "Youth_Female",
+              tier: age >= 19 ? 5 : age >= 17 ? 6 : 7,
+            };
+          }
+        }
+      }
+    }
+
+    if (!competition) {
+      const scrapedCompName = extractCompetitionName(html);
+      console.log("DEBUG scrapedCompName:", scrapedCompName);
+      if (scrapedCompName) {
+        const { data: compByName } = await supabaseAdmin
+          .from("competitions")
+          .select("nff_competition_id, tier, gender, name")
+          .ilike("name", `%${scrapedCompName}%`)
+          .maybeSingle();
+        console.log("DEBUG compByName:", compByName);
+        if (compByName) competition = compByName;
+      }
+    }
+
+    console.log("DEBUG competition:", competition);
+    console.log("DEBUG compGender:", competition?.gender);
+
     const compTier   = competition?.tier   ?? null;
-    const compGender = competition?.gender ?? null;
+    const compGender = competition?.gender ?? (searchParams.get("gender") ?? null);
 
     // Resolve team IDs: DB first, then mapping table, then logo ID
     const resolveId = (logoId: string | null, dbId: string | null) => {
@@ -182,11 +237,12 @@ export async function GET(req: Request) {
 
     // Match scraped names to IDs by club logo position
     const teamsFromHtml = extractTeamNamesWithIds(html);
-    const homeNameFromHtml = teamsFromHtml.find(t => t.clubId === homeClubId)?.name ?? homeName;
-    const awayNameFromHtml = teamsFromHtml.find(t => t.clubId === awayClubId)?.name ?? awayName;
+    const homeNameFromHtml = teamsFromHtml.find(t => t.clubId === homeClubId)?.name ?? null;
+    const awayNameFromHtml = teamsFromHtml.find(t => t.clubId === awayClubId)?.name ?? null;
 
-    const resolvedHomeName = homeNameFromHtml;
-    const resolvedAwayName = awayNameFromHtml;
+    // Fall back to DB name lookup if HTML matching failed
+    const resolvedHomeName = homeName ?? (resolvedHomeId && teamNameMap.get(resolvedHomeId)) ?? null;
+    const resolvedAwayName = awayName ?? (resolvedAwayId && teamNameMap.get(resolvedAwayId)) ?? null;
 
     const home = {
       starters: homePlayers.filter(p => p.role === "starter"),

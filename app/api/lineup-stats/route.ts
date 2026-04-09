@@ -321,11 +321,23 @@ function blendStrength(cur: number, prev: number, played: number, tier: number |
   return clamp01(Math.max(Math.min(blended, ceiling), floor));
 }
 
-function bestTableRow(rows: TableRow[], teamId: string | null, preferCompId?: string | null, preferTier?: number | null): TableRow | null {
+function bestTableRow(rows: TableRow[], teamId: string | null, preferCompId?: string | null, preferTier?: number | null, gender?: string | null): TableRow | null {
   if (!teamId || !rows.length) return null;
   const teamRows = rows.filter(r => String(r.nff_team_id) === String(teamId));
   if (!teamRows.length) return null;
-  const leagueRows = teamRows.filter(r => (r.tier ?? 99) < 9 && r.gender !== "Youth_Male" && r.gender !== "Youth_Female");
+  const leagueRows = teamRows.filter(r => {
+    if ((r.tier ?? 99) >= 9) return false;
+    if (gender) {
+      const rg = (r.gender ?? "").toLowerCase();
+      const mg = gender.toLowerCase();
+      if (mg === "youth_male" && rg !== "youth_male") return false;
+      if (mg === "youth_female" && rg !== "youth_female") return false;
+      if (mg === "male" && (rg === "female" || rg === "youth_male" || rg === "youth_female")) return false;
+      if (mg === "female" && (rg === "male" || rg === "youth_male" || rg === "youth_female")) return false;
+    }
+    if (!gender && (r.gender === "Youth_Male" || r.gender === "Youth_Female")) return false;
+    return true;
+  });
   const source = leagueRows.length > 0 ? leagueRows : teamRows;
   if (preferCompId) {
     const compMatch = source.find(r => r.nff_competition_id === preferCompId);
@@ -382,13 +394,6 @@ function sideRating(side: { starters: any[]; bench: any[] }, strength: number, m
   const coverage = side.starters.length ? startersKnown / side.starters.length : 0;
   const effectiveWithPenalty = effectiveStr * (1 - untrackedPen * 0.7);
 
-  // Don't let lineup scores inflate effectiveStrength beyond the team's historical strength
-  // Use team strength as an anchor — lineup can only move it by ±40%
-  const anchoredStr = clamp(
-    effectiveWithPenalty,
-    strength * 0.6,
-    strength * 1.4
-  );
 
   return {
     starters: Math.round(starterSum),
@@ -396,7 +401,7 @@ function sideRating(side: { starters: any[]; bench: any[] }, strength: number, m
     raw:      Math.round(raw),
     total:    Math.round(scaled),
     coverage,
-    effectiveStrength: Math.max(anchoredStr, strength * 0.3),
+    effectiveStrength: Math.max(effectiveWithPenalty, strength * 0.3),
   };
 }
 
@@ -414,6 +419,7 @@ function computeOverall(params: {
 
 // ── Odds model ─────────────────────────────────────────────────────────────
 
+
 function computeOdds(params: {
   homeTier: number; awayTier: number;
   homeStrength: number; awayStrength: number;
@@ -422,25 +428,27 @@ function computeOdds(params: {
   homePosition: number | null; awayPosition: number | null;
   homePlayed: number; awayPlayed: number;
   homeLineupTotal: number; awayLineupTotal: number;
+  homeAvgCeiling: number; awayAvgCeiling: number;
   women: boolean;
 }) {
-  const homeCeilingAvg = params.homeTier <= 1 ? 92 : params.homeTier === 2 ? 78 : params.homeTier === 3 ? 64 : params.homeTier === 4 ? 55 : 45;
-  const awayCeilingAvg = params.awayTier <= 1 ? 92 : params.awayTier === 2 ? 78 : params.awayTier === 3 ? 64 : params.awayTier === 4 ? 55 : 45;
-
   const tierQualityHome = params.homeTier <= 1 ? 1.0 : params.homeTier === 2 ? 0.78 : params.homeTier === 3 ? 0.58 : params.homeTier === 4 ? 0.43 : 0.32;
   const tierQualityAway = params.awayTier <= 1 ? 1.0 : params.awayTier === 2 ? 0.78 : params.awayTier === 3 ? 0.58 : params.awayTier === 4 ? 0.43 : 0.32;
 
-  const homeRatio = clamp(params.homeLineupTotal / (homeCeilingAvg * 11), 0, 1.6) * tierQualityHome;
-  const awayRatio = clamp(params.awayLineupTotal / (awayCeilingAvg * 11), 0, 1.6) * tierQualityAway;
-  const lineupZ = (homeRatio - awayRatio) * 2.0;
+  const homeRatio = clamp((params.homeLineupTotal / (55 * 11)) * (params.homeAvgCeiling / 55), 0, 1.6) * tierQualityHome;
+  const awayRatio = clamp((params.awayLineupTotal / (55 * 11)) * (params.awayAvgCeiling / 55), 0, 1.6) * tierQualityAway;
+  const ceilingGap = (params.awayAvgCeiling - params.homeAvgCeiling) / 55;
+  const lineupZ = (homeRatio - awayRatio) * 2.0 + ceilingGap * 1.5;
   const strengthZ = clamp(params.homeStrength - params.awayStrength, -1, 1) * 1.2;
 
   const MISS_CEILINGS: Record<number, number> = { 1: 92, 2: 78, 3: 64, 4: 55, 5: 45, 6: 36 };
-  const homeMissN  = clamp(params.homeMissingImpact / ((MISS_CEILINGS[params.homeTier] ?? 50) * 4), 0, 1);
-  const awayMissN  = clamp(params.awayMissingImpact / ((MISS_CEILINGS[params.awayTier] ?? 50) * 4), 0, 1);
+  const homeMissN  = clamp(params.homeMissingImpact / ((MISS_CEILINGS[params.homeTier] ?? 50) * 7), 0, 1);
+  const awayMissN  = clamp(params.awayMissingImpact / ((MISS_CEILINGS[params.awayTier] ?? 50) * 7), 0, 1);  
   const missingAdj = clamp((awayMissN - homeMissN) * 1.2, -1.0, 1.0) * 0.7;
 
-  const playedWeight = clamp01(Math.min(params.homePlayed, params.awayPlayed) / 6);
+  const isNewSeason = params.homePlayed <= 3 || params.awayPlayed <= 3;
+  const playedWeight = isNewSeason 
+    ? clamp01(Math.min(params.homePlayed, params.awayPlayed) / 6) * 0.3
+    : clamp01(Math.min(params.homePlayed, params.awayPlayed) / 6);
   const posGap  = (params.awayPosition ?? 6) - (params.homePosition ?? 6);
   const tiersSame = params.homeTier === params.awayTier;
   const posZ    = tiersSame ? clamp(posGap * 0.10, -0.7, 0.7) * playedWeight : 0;
@@ -448,22 +456,11 @@ function computeOdds(params: {
   const tierAdv = clamp(tierGap * 0.45, -1.2, 1.2);
   const homeAdv = 0.16;
 
-  const homeMissingGoalsZ = clamp((params.homeMissingGoals ?? 0) * 0.55, 0, 1.0);
-  const awayMissingGoalsZ = clamp((params.awayMissingGoals ?? 0) * 0.55, 0, 1.0);
-  const missingGoalsAdj   = awayMissingGoalsZ - homeMissingGoalsZ;
+  const homeMissingGoalsZ = clamp((params.homeMissingGoals ?? 0) / 0.5, 0, 1.0);
+  const awayMissingGoalsZ = clamp((params.awayMissingGoals ?? 0) / 0.5, 0, 1.0);
+  const missingGoalsAdj = clamp((awayMissingGoalsZ - homeMissingGoalsZ) * 0.25, -0.3, 0.3);
 
-  console.log("DEBUG z components:", {
-    lineupZ,
-    strengthZ,
-    tierAdv,
-    posZ,
-    missingAdj,
-    homeAdv,
-    homeMissN,
-    awayMissN,
-    homeMissingImpact: params.homeMissingImpact,
-    awayMissingImpact: params.awayMissingImpact,
-  });
+  console.log("DEBUG z:", { lineupZ, strengthZ, tierAdv, posZ, missingAdj, missingGoalsAdj, homeAdv, ceilingGap });
 
   const z       = lineupZ + missingAdj + missingGoalsAdj + strengthZ + posZ + tierAdv + homeAdv;
   const pHomeR  = sigmoid(z);
@@ -568,11 +565,12 @@ function computeGoals(params: {
 
 // ── Likely XI ──────────────────────────────────────────────────────────────
 
-async function getLikelyXI(teamId: string, seasonYear: number, gender: string | null): Promise<string[]> {
+async function getLikelyXI(teamId: string, seasonYear: number, gender: string | null, competitionId?: string | null): Promise<string[]> {
   const prevYear = seasonYear - 1;
   const buildQuery = (year: number) => {
     let q = supabaseAdmin.from("player_season_to_date").select("nff_player_id, starts, minutes, gender")
       .eq("season_year", year).eq("nff_team_id", teamId).order("starts", { ascending: false }).limit(40);
+    if (competitionId) q = q.eq("nff_competition_id", competitionId);
     return q;
   };
   const [{ data: cur }, { data: prev }] = await Promise.all([buildQuery(seasonYear), buildQuery(prevYear)]);
@@ -769,10 +767,10 @@ export async function GET(req: Request) {
     }
 
     const compId = matchComp?.nff_competition_id ?? null;
-    const homeCurTable  = bestTableRow(curTableRows,  homeTeamId, compId, inferredTier);
-    const awayCurTable  = bestTableRow(curTableRows,  awayTeamId, compId, inferredTier);
-    const homePrevTable = bestTableRow(prevTableRows, homeTeamId, compId, inferredTier);
-    const awayPrevTable = bestTableRow(prevTableRows, awayTeamId, compId, inferredTier);
+    const homeCurTable  = bestTableRow(curTableRows,  homeTeamId, compId, inferredTier, matchGender);
+    const awayCurTable  = bestTableRow(curTableRows,  awayTeamId, compId, inferredTier, matchGender);
+    const homePrevTable = bestTableRow(prevTableRows, homeTeamId, compId, inferredTier, matchGender);
+    const awayPrevTable = bestTableRow(prevTableRows, awayTeamId, compId, inferredTier, matchGender);
 
     // Infer gender from table rows if matchGender is null
     const inferredGender = matchGender
@@ -836,7 +834,11 @@ export async function GET(req: Request) {
       const calcCurRows = (broadBestTier < chosenBestTier && broadBestTier < sideTier) ? broadCurRows : (chosenCurRows.length > 0 ? chosenCurRows : broadCurRows);
       const calcPrevRows = chosenPrevRows.length > 0 ? chosenPrevRows : broadPrevRows;
 
-      const higherTierRows = broadCurRows.filter(r => (r.tier ?? 99) < sideTier);
+      const higherTierRows = broadCurRows.filter(r => {
+        const t = r.tier ?? 99;
+        if (t >= sideTier) return false;
+        return r.minutes >= 450 || r.starts >= 5;
+      });
       const currResult = higherTierRows.length > 0 
         ? calcWeightedImportance(higherTierRows, seasonYear) 
         : calcWeightedImportance(calcCurRows, seasonYear);
@@ -863,7 +865,12 @@ export async function GET(req: Request) {
 
       // No current season evidence → cap at 10
       const hasCurEvidence = calcCurRows.some(r => r.minutes > 0 || r.starts > 0);
-      if (!hasCurEvidence) importance = Math.min(importance, 10);
+      const hasPrevEvidence = calcPrevRows.some(r => r.minutes > 0 || r.starts > 0);
+      if (!hasCurEvidence && !hasPrevEvidence) {
+        importance = Math.round(sideCeiling * 0.25);
+      } else if (!hasCurEvidence) {
+        importance = Math.min(importance, 10);
+      }
 
       // ── Finland-style tier ceiling logic ──────────────────────────────────
       // Find the player's highest proven tier (with sufficient evidence)
@@ -877,7 +884,7 @@ export async function GET(req: Request) {
         const mins   = Number(r.minutes ?? 0);
         const starts = Number(r.starts ?? 0);
         const apps   = Number(r.appearances ?? 0);
-        const hasEvidence = mins >= 450 || starts >= 5 || apps >= 8;
+        const hasEvidence = mins >= 450 || starts >= 5;
         return hasEvidence && t < best ? t : best;
       }, 99);
 
@@ -1035,7 +1042,10 @@ export async function GET(req: Request) {
       const teamId = side === "home" ? homeTeamId : awayTeamId;
       if (!teamId) return { missing: [], missingImpact: 0 };
 
-      const likelyXI = await getLikelyXI(teamId, seasonYear, effectiveGender);
+      const sideCompId = side === "home"
+        ? (homeCurTable?.nff_competition_id ?? compId)
+        : (awayCurTable?.nff_competition_id ?? compId);
+      const likelyXI = await getLikelyXI(teamId, seasonYear, effectiveGender, sideCompId);
       const sideLineup = side === "home" ? home : away;
       const presentIds = new Set([
         ...sideLineup.starters.map((p: any) => p.nff_player_id),
@@ -1046,7 +1056,7 @@ export async function GET(req: Request) {
       if (!missingIds.length) return { missing: [], missingImpact: 0 };
 
       const [{ data: missRows }, { data: missPrevRows }] = await Promise.all([
-        supabaseAdmin.from("player_season_to_date").select("*").eq("season_year", seasonYear).eq("nff_team_id", teamId).in("nff_player_id", missingIds),
+        supabaseAdmin.from("player_season_to_date").select("*").eq("season_year", seasonYear).eq("nff_team_id", teamId).eq("nff_competition_id", sideCompId ?? "").in("nff_player_id", missingIds),
         supabaseAdmin.from("player_season_to_date").select("*").eq("season_year", prevSeasonYear).eq("nff_team_id", teamId).in("nff_player_id", missingIds),
       ]);
 
@@ -1111,6 +1121,13 @@ export async function GET(req: Request) {
       awayStrength,
     });
 
+    const homeAvgCeiling = home.starters.length > 0
+      ? home.starters.reduce((s: number, p: any) => s + (p.importanceCeiling ?? 55), 0) / home.starters.length
+      : 55;
+    const awayAvgCeiling = away.starters.length > 0
+      ? away.starters.reduce((s: number, p: any) => s + (p.importanceCeiling ?? 55), 0) / away.starters.length
+      : 55;
+
     const pricing = computeOdds({
       homeTier, awayTier,
       homeStrength: homeRating.effectiveStrength,
@@ -1125,8 +1142,14 @@ export async function GET(req: Request) {
       awayPlayed:   awayCurStr.played,
       homeLineupTotal: homeRating.total,
       awayLineupTotal: awayRating.total,
+      homeAvgCeiling,
+      awayAvgCeiling,
       women: effectiveIsWomen,
     });
+
+    console.log("DEBUG ceilings:", { homeAvgCeiling, awayAvgCeiling, homeTotal: homeRating.total, awayTotal: awayRating.total });
+    console.log("DEBUG missing:", { homeMissingGoals, awayMissingGoals, homeMissing: homeMissing.missing.map((p:any) => ({ name: p.player_name, goals: p.goals })) });
+    console.log("DEBUG missingImpact:", { homeMissingImpact: homeMissing.missingImpact, awayMissingImpact: awayMissing.missingImpact });
 
     const goalsModel = computeGoals({
       homeTier, awayTier,
