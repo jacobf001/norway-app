@@ -148,11 +148,12 @@ function calcImportance(params: {
   const maxMins     = params.maxGames * 90;
   const minutesN    = clamp01(params.minutes / Math.max(1, maxMins));
   const startsN     = clamp01(params.starts  / Math.max(1, params.maxGames));
+  const startsDominant = startsN >= 0.6 ? Math.min(startsN * 1.15, 1.0) : startsN;
   const goalsBoost  = clamp01(params.goals / 15) * 0.08;
   const cardPenalty = clamp01(params.yellows * 0.02 + params.reds * 0.08);
 
   // Simple weighted blend — no participation curve multiplier
-  const raw = minutesN * 0.55 + startsN * 0.45 + goalsBoost - cardPenalty;
+  const raw = minutesN * 0.35 + startsDominant * 0.65 + goalsBoost - cardPenalty;
   return Math.min(Math.max(0, Math.round(raw * params.ceiling)), params.ceiling);
 }
 
@@ -864,7 +865,8 @@ export async function GET(req: Request) {
       importance        = Math.min(importance, importanceCeiling);
 
       // No current season evidence → cap at 10
-      const hasCurEvidence = calcCurRows.some(r => r.minutes > 0 || r.starts > 0);
+      const allCurRows = [...(curByPlayer.get(p.nff_player_id) ?? [])];
+      const hasCurEvidence = allCurRows.some(r => r.minutes > 0 || r.starts > 0);
       const hasPrevEvidence = calcPrevRows.some(r => r.minutes > 0 || r.starts > 0);
       if (!hasCurEvidence && !hasPrevEvidence) {
         importance = Math.round(sideCeiling * 0.25);
@@ -947,8 +949,7 @@ export async function GET(req: Request) {
             .sort((a, b) => b.minutes - a.minutes)[0]?.nff_team_id ?? null;
           const prevPosData = prevTeamId ? positionMap.get(`${prevTeamId}_${prevSeasonYear}`) ?? positionMap.get(`${prevTeamId}_${seasonYear}`) : null;
           const prevPos = prevPosData?.position ?? null;
-          if (sidePosition && prevPos && prevPos < sidePosition + 3) {
-            // Coming from a meaningfully lower-ranked club — discount
+          if (sidePosition && prevPos && prevPos > sidePosition + 3) {
             const posGap = prevPos - sidePosition;
             const posDiscount = posGap >= 8 ? 0.55 : posGap >= 6 ? 0.65 : posGap >= 4 ? 0.75 : 0.85;
             importance = Math.round(importance * posDiscount);
@@ -1009,6 +1010,16 @@ export async function GET(req: Request) {
       // Best current season row for display in table
       // Use the first seasons entry for the headline stats so they match the dropdown
       const firstSeason = seasons[0] ?? null;
+
+      if (p.name?.includes("Emin")) {
+        console.log("DEBUG Emin:", {
+          calcCurRows: calcCurRows.map(r => ({ team: r.nff_team_id, mins: r.minutes, starts: r.starts, tier: r.tier })),
+          currResult,
+          prevResult,
+          importance,
+          importanceCeiling,
+        });
+      }
 
       return {
         ...p,
@@ -1112,15 +1123,6 @@ export async function GET(req: Request) {
     const homeMissingGoals = missingGoalsPerGame(homeMissing.missing, homeTier);
     const awayMissingGoals = missingGoalsPerGame(awayMissing.missing, awayTier);
 
-    console.log("DEBUG ratings:", {
-      homeLineupTotal: homeRating.total,
-      awayLineupTotal: awayRating.total,
-      homeEffStr: homeRating.effectiveStrength,
-      awayEffStr: awayRating.effectiveStrength,
-      homeStrength,
-      awayStrength,
-    });
-
     const homeAvgCeiling = home.starters.length > 0
       ? home.starters.reduce((s: number, p: any) => s + (p.importanceCeiling ?? 55), 0) / home.starters.length
       : 55;
@@ -1147,10 +1149,6 @@ export async function GET(req: Request) {
       women: effectiveIsWomen,
     });
 
-    console.log("DEBUG ceilings:", { homeAvgCeiling, awayAvgCeiling, homeTotal: homeRating.total, awayTotal: awayRating.total });
-    console.log("DEBUG missing:", { homeMissingGoals, awayMissingGoals, homeMissing: homeMissing.missing.map((p:any) => ({ name: p.player_name, goals: p.goals })) });
-    console.log("DEBUG missingImpact:", { homeMissingImpact: homeMissing.missingImpact, awayMissingImpact: awayMissing.missingImpact });
-
     const goalsModel = computeGoals({
       homeTier, awayTier,
       homeStrength: homeRating.effectiveStrength,
@@ -1159,6 +1157,31 @@ export async function GET(req: Request) {
       awayMissingGoals,
       women: effectiveIsWomen,
     });
+
+    // H2H from DB
+    let h2h = null;
+    if (homeTeamId && awayTeamId) {
+      const { data: h2hRows } = await supabaseAdmin
+        .from("matches")
+        .select("nff_match_id, kickoff_at, home_team_nff_id, away_team_nff_id, home_score, away_score")
+        .or(`and(home_team_nff_id.eq.${homeTeamId},away_team_nff_id.eq.${awayTeamId}),and(home_team_nff_id.eq.${awayTeamId},away_team_nff_id.eq.${homeTeamId})`)
+        .order("kickoff_at", { ascending: false })
+        .limit(10);
+      
+      if (h2hRows?.length) {
+        const homeWins = h2hRows.filter(r => 
+          (String(r.home_team_nff_id) === homeTeamId && r.home_score > r.away_score) ||
+          (String(r.away_team_nff_id) === homeTeamId && r.away_score > r.home_score)
+        ).length;
+        const awayWins = h2hRows.filter(r =>
+          (String(r.home_team_nff_id) === awayTeamId && r.home_score > r.away_score) ||
+          (String(r.away_team_nff_id) === awayTeamId && r.away_score > r.home_score)
+        ).length;
+        const draws = h2hRows.filter(r => r.home_score === r.away_score).length;
+        h2h = { played: h2hRows.length, homeWins, draws, awayWins, recent: h2hRows };
+        console.log("DEBUG h2h:", JSON.stringify(h2h, null, 2));
+      }
+    }
 
     return NextResponse.json({
       inputUrl,
@@ -1175,6 +1198,7 @@ export async function GET(req: Request) {
       goals: goalsModel,
       home: { ...home, rating: homeRating, missingLikelyXI: homeMissing.missing, missingImpact: homeMissing.missingImpact },
       away: { ...away, rating: awayRating, missingLikelyXI: awayMissing.missing, missingImpact: awayMissing.missingImpact },
+      h2h,
       model_version: "v2_norway",
     });
 

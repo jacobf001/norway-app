@@ -80,6 +80,54 @@ export default function HomePage() {
     if (tier === 5) return 45; if (tier === 6) return 36; return 28;
   }
 
+  function H2HCard({ h2h, homeTeamId, awayTeamId, homeName, awayName }: {
+    h2h: any;
+    homeTeamId: string | null;
+    awayTeamId: string | null;
+    homeName: string;
+    awayName: string;
+  }) {
+    if (!h2h || !h2h.played) return null;
+    return (
+      <div className="rounded-2xl border border-white/8 bg-white/3 p-6">
+        <h3 className="text-base font-semibold mb-4">Head to Head</h3>
+        <div className="flex items-center justify-between mb-5">
+          <div className="text-center">
+            <div className="text-2xl font-bold text-blue-400">{h2h.homeWins}</div>
+            <div className="text-xs text-white/40 font-mono mt-1">{homeName}</div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-white/40">{h2h.draws}</div>
+            <div className="text-xs text-white/40 font-mono mt-1">Draws</div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-orange-400">{h2h.awayWins}</div>
+            <div className="text-xs text-white/40 font-mono mt-1">{awayName}</div>
+          </div>
+        </div>
+        <div className="space-y-2">
+          {h2h.recent.map((m: any) => {
+            const mHomeId = String(m.home_team_nff_id);
+            const mAwayId = String(m.away_team_nff_id);
+            const mHomeName = mHomeId === homeTeamId ? homeName : awayName;
+            const mAwayName = mAwayId === awayTeamId ? awayName : homeName;
+            const isHomeWin = m.home_score > m.away_score;
+            const isAwayWin = m.away_score > m.home_score;
+            const date = new Date(m.kickoff_at).toLocaleDateString("no-NO", { day: "2-digit", month: "2-digit", year: "2-digit" });
+            return (
+              <div key={m.nff_match_id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-white/3 text-sm">
+                <span className="text-white/40 font-mono text-xs w-16">{date}</span>
+                <span className={clsx("flex-1 text-right text-xs truncate", isHomeWin ? "text-white/80 font-semibold" : "text-white/40")}>{mHomeName}</span>
+                <span className="mx-3 font-mono font-bold text-white/80">{m.home_score} - {m.away_score}</span>
+                <span className={clsx("flex-1 text-left text-xs truncate", isAwayWin ? "text-white/80 font-semibold" : "text-white/40")}>{mAwayName}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-[#0a0a0c] text-white">
       <div className="border-b border-white/5 bg-black/40">
@@ -117,6 +165,13 @@ export default function HomePage() {
               <SideHeaderCard side="Home" team={analysis.teams?.home} ctx={analysis.teamStrengthDebug?.home} />
               <SideHeaderCard side="Away" team={analysis.teams?.away} ctx={analysis.teamStrengthDebug?.away} />
             </div>
+            <H2HCard
+              h2h={analysis.h2h}
+              homeTeamId={analysis.teams?.home?.nff_team_id ?? null}
+              awayTeamId={analysis.teams?.away?.nff_team_id ?? null}
+              homeName={analysis.teams?.home?.team_name ?? "Home"}
+              awayName={analysis.teams?.away?.team_name ?? "Away"}
+            />
             <ModelCard analysis={analysis} />
             {((analysis.home?.missingLikelyXI?.length ?? 0) > 0 || (analysis.away?.missingLikelyXI?.length ?? 0) > 0) && (
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -171,7 +226,7 @@ function ModelCard({ analysis }: { analysis: any }) {
           <div className="h-3 rounded-full bg-white/5 overflow-hidden flex">
             <div className="h-full bg-blue-500" style={{ width: `${Math.round(p.home * 100)}%` }} />
             <div className="h-full bg-white/15" style={{ width: `${Math.round(p.draw * 100)}%` }} />
-            <div className="h-full bg-orange-500" style={{ width: `${Math.round(p.away * 100)}%` }} />
+            <div className="h-full bg-orange-500 flex-1" />
           </div>
         </div>
       )}

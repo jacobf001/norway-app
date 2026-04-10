@@ -75,6 +75,43 @@ function extractScore(html: string): { home: number | null; away: number | null;
   };
 }
 
+function extractH2H(html: string): {
+  played: number; homeWins: number; draws: number; awayWins: number;
+  homeGoals: number; awayGoals: number;
+  recent: Array<{ date: string; homeTeam: string; awayTeam: string; homeScore: number; awayScore: number; competition: string }>;
+} | null {
+  // Summary stats
+  const playedM = html.match(/(\d+)\s*kamper/i);
+  if (!playedM) return null;
+
+  const winsMatches = [...html.matchAll(/(\d+)\s*seiere/gi)];
+  const goalsMatches = [...html.matchAll(/(\d+)\s*totalt/gi)];
+
+  const homeWins = winsMatches[0] ? parseInt(winsMatches[0][1]) : 0;
+  const awayWins = winsMatches[1] ? parseInt(winsMatches[1][1]) : 0;
+  const drawsM = html.match(/Uavgjort:[^0-9]*(\d+)/);
+  const draws = drawsM ? parseInt(drawsM[1]) : 0;
+  const homeGoals = goalsMatches[0] ? parseInt(goalsMatches[0][1]) : 0;
+  const awayGoals = goalsMatches[1] ? parseInt(goalsMatches[1][1]) : 0;
+
+  // Recent results
+  const recent: Array<{ date: string; homeTeam: string; awayTeam: string; homeScore: number; awayScore: number; competition: string }> = [];
+  const matchBlocks = [...html.matchAll(/(\d{2}\.\d{2}\.\d{2})[^<]*<\/[^>]+>[\s\S]*?(\d+)\s*-\s*(\d+)[\s\S]*?<[^>]+>\s*([^<]+?)\s*<\/[^>]+>[\s\S]*?<[^>]+>\s*([^<]+?)\s*<\/[^>]+>[\s\S]*?<[^>]+>\s*([^<]+?)\s*<\/[^>]+>/g)];
+
+  for (const m of matchBlocks.slice(0, 5)) {
+    recent.push({
+      date: m[1],
+      homeScore: parseInt(m[2]),
+      awayScore: parseInt(m[3]),
+      homeTeam: decodeHtmlEntities(m[4]),
+      awayTeam: decodeHtmlEntities(m[5]),
+      competition: decodeHtmlEntities(m[6]),
+    });
+  }
+
+  return { played: parseInt(playedM[1]), homeWins, draws, awayWins, homeGoals, awayGoals, recent };
+}
+
 function parseSide(html: string): Array<{ nff_player_id: string; name: string; shirt_no: number | null; role: "starter" | "substitute" }> {
   const players: Array<{ nff_player_id: string; name: string; shirt_no: number | null; role: "starter" | "substitute" }> = [];
   const subIdx = html.indexOf("Innbyttere");

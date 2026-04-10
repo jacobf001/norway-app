@@ -44,6 +44,9 @@ export const TEAM_ID_MAPPINGS: Record<string, TeamSplit> = {
     main:    { id: "2",      name: "Tromsø" },
     reserve: { id: "155101", name: "Tromsø 2" },
   },
+   "1118": {
+    main: { id: "1691", name: "Byåsen TF" },
+  },
 
   // Add more as discovered:
   // "LOGO_ID": {
