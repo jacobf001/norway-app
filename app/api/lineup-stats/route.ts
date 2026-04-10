@@ -431,6 +431,7 @@ function computeOdds(params: {
   homeLineupTotal: number; awayLineupTotal: number;
   homeAvgCeiling: number; awayAvgCeiling: number;
   women: boolean;
+  sameCompetition: boolean;
 }) {
   const tierQualityHome = params.homeTier <= 1 ? 1.0 : params.homeTier === 2 ? 0.78 : params.homeTier === 3 ? 0.58 : params.homeTier === 4 ? 0.43 : 0.32;
   const tierQualityAway = params.awayTier <= 1 ? 1.0 : params.awayTier === 2 ? 0.78 : params.awayTier === 3 ? 0.58 : params.awayTier === 4 ? 0.43 : 0.32;
@@ -438,7 +439,8 @@ function computeOdds(params: {
   const homeRatio = clamp((params.homeLineupTotal / (55 * 11)) * (params.homeAvgCeiling / 55), 0, 1.6) * tierQualityHome;
   const awayRatio = clamp((params.awayLineupTotal / (55 * 11)) * (params.awayAvgCeiling / 55), 0, 1.6) * tierQualityAway;
   const ceilingGap = (params.awayAvgCeiling - params.homeAvgCeiling) / 55;
-  const lineupZ = (homeRatio - awayRatio) * 2.0 + ceilingGap * 1.5;
+  const tierDiff = Math.abs(params.homeTier - params.awayTier);
+  const lineupZ = (homeRatio - awayRatio) * 2.0 + (tierDiff > 0 ? ceilingGap * 1.5 : 0);
   const strengthZ = clamp(params.homeStrength - params.awayStrength, -1, 1) * 1.2;
 
   const MISS_CEILINGS: Record<number, number> = { 1: 92, 2: 78, 3: 64, 4: 55, 5: 45, 6: 36 };
@@ -452,7 +454,7 @@ function computeOdds(params: {
     : clamp01(Math.min(params.homePlayed, params.awayPlayed) / 6);
   const posGap  = (params.awayPosition ?? 6) - (params.homePosition ?? 6);
   const tiersSame = params.homeTier === params.awayTier;
-  const posZ    = tiersSame ? clamp(posGap * 0.10, -0.7, 0.7) * playedWeight : 0;
+  const posZ    = tiersSame && params.sameCompetition ? clamp(posGap * 0.10, -0.7, 0.7) * playedWeight : 0;
   const tierGap = params.awayTier - params.homeTier;
   const tierAdv = clamp(tierGap * 0.45, -1.2, 1.2);
   const homeAdv = 0.16;
@@ -462,6 +464,7 @@ function computeOdds(params: {
   const missingGoalsAdj = clamp((awayMissingGoalsZ - homeMissingGoalsZ) * 0.25, -0.3, 0.3);
 
   console.log("DEBUG z:", { lineupZ, strengthZ, tierAdv, posZ, missingAdj, missingGoalsAdj, homeAdv, ceilingGap });
+
 
   const z       = lineupZ + missingAdj + missingGoalsAdj + strengthZ + posZ + tierAdv + homeAdv;
   const pHomeR  = sigmoid(z);
@@ -474,6 +477,8 @@ function computeOdds(params: {
   const sideTot = pHome + pAway;
   const target  = 1 - pDraw;
   if (sideTot > 0) { pHome = pHome / sideTot * target; pAway = pAway / sideTot * target; }
+
+  console.log("DEBUG ratios:", { homeRatio, awayRatio, ceilingGap, lineupZ });
 
   return {
     probabilities: { home: pHome, draw: pDraw, away: pAway },
@@ -1129,6 +1134,17 @@ export async function GET(req: Request) {
     const awayAvgCeiling = away.starters.length > 0
       ? away.starters.reduce((s: number, p: any) => s + (p.importanceCeiling ?? 55), 0) / away.starters.length
       : 55;
+    const sameCompetition = homeCurTable?.nff_competition_id != null &&
+      homeCurTable?.nff_competition_id === awayCurTable?.nff_competition_id;
+
+    console.log("DEBUG ratings:", {
+      homeLineupTotal: homeRating.total,
+      awayLineupTotal: awayRating.total,
+      homeEffStr: homeRating.effectiveStrength,
+      awayEffStr: awayRating.effectiveStrength,
+      homeStrength,
+      awayStrength,
+    });
 
     const pricing = computeOdds({
       homeTier, awayTier,
@@ -1147,6 +1163,7 @@ export async function GET(req: Request) {
       homeAvgCeiling,
       awayAvgCeiling,
       women: effectiveIsWomen,
+      sameCompetition,
     });
 
     const goalsModel = computeGoals({
