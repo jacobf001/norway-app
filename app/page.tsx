@@ -19,7 +19,7 @@ function SideHeaderCard({
   const tierLabel = ctx?.tier != null ? `T${ctx.tier}` : null;
   const posLabel  = ctx?.position != null ? `Pos ${ctx.position}` : null;
   const playedLabel = ctx?.played != null ? `${ctx.played} played` : null;
-  const strengthPct = ctx?.strength != null ? Math.round(ctx.strength * 100) : null;
+  const strengthPct = ctx?.strength != null ? relativeStrength(ctx.strength, ctx?.tier ?? null) : null;
 
   return (
     <div className={clsx("rounded-xl border p-5 relative overflow-hidden", isHome ? "border-blue-500/20 bg-blue-950/20" : "border-orange-500/20 bg-orange-950/20")}>
@@ -162,8 +162,8 @@ export default function HomePage() {
         {analysis && (
           <div className="space-y-6">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <SideHeaderCard side="Home" team={analysis.teams?.home} ctx={analysis.teamStrengthDebug?.home} />
-              <SideHeaderCard side="Away" team={analysis.teams?.away} ctx={analysis.teamStrengthDebug?.away} />
+              <SideHeaderCard side="Home" team={analysis.teams?.home} ctx={{ ...analysis.teamStrengthDebug?.home, strength: analysis.teamStrength?.home }} />
+              <SideHeaderCard side="Away" team={analysis.teams?.away} ctx={{ ...analysis.teamStrengthDebug?.away, strength: analysis.teamStrength?.away }} />
             </div>
             <H2HCard
               h2h={analysis.h2h}
@@ -192,6 +192,23 @@ export default function HomePage() {
   );
 }
 
+const TIER_RANGES: Record<number, [number, number]> = {
+  1: [0.30, 1.0],
+  2: [0.20, 0.54],
+  3: [0.08, 0.34],
+  4: [0.05, 0.30],
+  5: [0.03, 0.22],
+  6: [0.01, 0.12],
+};
+
+function relativeStrength(strength: number, tier: number | null): number {
+  if (!tier) return Math.round(strength * 100);
+  const [lo, hi] = TIER_RANGES[tier] ?? [0, 1];
+  const clamped = Math.max(0, Math.min(1, (strength - lo) / Math.max(0.01, hi - lo)));
+  return Math.round(clamped * 100);
+}
+
+
 function ModelCard({ analysis }: { analysis: any }) {
   const p = analysis.probabilities;
   const odds = analysis.odds;
@@ -199,8 +216,8 @@ function ModelCard({ analysis }: { analysis: any }) {
   const [marketOdds, setMarketOdds] = useState({ home: "", away: "", over15: "", over25: "", over35: "" });
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
-  const homeStrength = analysis.teamStrengthDebug?.home?.strength ?? 0;
-  const awayStrength = analysis.teamStrengthDebug?.away?.strength ?? 0;
+  const homeStrength = analysis.teamStrength?.home ?? analysis.teamStrengthDebug?.home?.strength ?? 0;
+  const awayStrength = analysis.teamStrength?.away ?? analysis.teamStrengthDebug?.away?.strength ?? 0;
   const homeName = analysis.teams?.home?.team_name ?? "Home";
   const awayName = analysis.teams?.away?.team_name ?? "Away";
  
@@ -387,19 +404,29 @@ function ModelCard({ analysis }: { analysis: any }) {
           { name: awayName, strength: awayStrength, tier: analysis.teamStrengthDebug?.away?.tier, color: "orange" as const },
         ]).map(({ name, strength, tier, color }) => {
           const str = Math.round(strength * 100);
+          const relStr = relativeStrength(strength, tier);
           const isBlue = color === "blue";
           const tierLabel = tier != null && Number(tier) < 90 ? `T${tier}` : "—";
+          const homeTier = analysis.teamStrengthDebug?.home?.tier;
+          const awayTier = analysis.teamStrengthDebug?.away?.tier;
+          const isCrossTier = homeTier != null && awayTier != null && homeTier !== awayTier;
           const tierColor = tier == null ? "text-white/20 bg-white/5 border-white/5" : tier <= 1 ? "text-emerald-300 bg-emerald-950/60 border-emerald-500/20" : tier === 2 ? "text-green-300 bg-green-950/60 border-green-500/20" : tier === 3 ? "text-yellow-300 bg-yellow-950/60 border-yellow-500/20" : tier === 4 ? "text-orange-300 bg-orange-950/60 border-orange-500/20" : "text-red-300 bg-red-950/60 border-red-500/20";
           return (
             <div key={name} className="rounded-lg bg-white/3 border border-white/5 px-3 py-2.5">
               <div className="flex items-center justify-between mb-2">
                 <span className={`text-xs font-mono font-semibold px-1.5 py-0.5 rounded border ${tierColor}`}>{tierLabel}</span>
-                <span className="text-xs font-mono text-white/50">{str}<span className="text-white/20">/100</span></span>
+                <div className="text-right">
+                  <span className="text-xs font-mono text-white/50">{relStr}<span className="text-white/20">/100</span></span>
+                  <span className="text-xs font-mono text-white/25 ml-1.5">({str} abs)</span>
+                </div>
               </div>
               <div className="h-1.5 rounded-full bg-white/8 overflow-hidden mb-2">
-                <div className={`h-full rounded-full ${isBlue ? "bg-blue-500" : "bg-orange-500"}`} style={{ width: `${Math.max(2, str)}%` }} />
+                <div className={`h-full rounded-full ${isBlue ? "bg-blue-500" : "bg-orange-500"}`} style={{ width: `${Math.max(2, relStr)}%` }} />
               </div>
               <div className={`text-xs font-medium truncate ${isBlue ? "text-blue-300/80" : "text-orange-300/80"}`}>{name}</div>
+              {isCrossTier && (
+                <div className="text-xs text-white/20 font-mono mt-1">cross-tier · not comparable</div>
+              )}
             </div>
           );
         })}

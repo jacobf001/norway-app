@@ -148,12 +148,13 @@ function calcImportance(params: {
   const maxMins     = params.maxGames * 90;
   const minutesN    = clamp01(params.minutes / Math.max(1, maxMins));
   const startsN     = clamp01(params.starts  / Math.max(1, params.maxGames));
-  const startsDominant = startsN >= 0.6 ? Math.min(startsN * 1.15, 1.0) : startsN;
+  const startsDominant = startsN >= 0.75
+    ? Math.min(startsN * 1.1, 1.0)
+    : startsN * 0.85;
   const goalsBoost  = clamp01(params.goals / 15) * 0.08;
   const cardPenalty = clamp01(params.yellows * 0.02 + params.reds * 0.08);
 
-  // Simple weighted blend — no participation curve multiplier
-  const raw = minutesN * 0.35 + startsDominant * 0.65 + goalsBoost - cardPenalty;
+  const raw = minutesN * 0.30 + startsDominant * 0.65 + goalsBoost - cardPenalty;
   return Math.min(Math.max(0, Math.round(raw * params.ceiling)), params.ceiling);
 }
 
@@ -348,8 +349,16 @@ function bestTableRow(rows: TableRow[], teamId: string | null, preferCompId?: st
     const tierMatch = source.find(r => r.tier === preferTier);
     if (tierMatch) return tierMatch;
   }
+  // Instead of picking lowest tier, pick closest to preferTier
   return source.reduce((best, r) => {
     if (!best) return r;
+    if (preferTier != null) {
+      const bestDiff = Math.abs(Number(best.tier ?? 99) - preferTier);
+      const rDiff = Math.abs(Number(r.tier ?? 99) - preferTier);
+      if (rDiff < bestDiff) return r;
+      if (rDiff === bestDiff && Number(r.played) > Number(best.played)) return r;
+      return best;
+    }
     const bestTier = Number(best.tier ?? 99);
     const rTier = Number(r.tier ?? 99);
     if (rTier < bestTier) return r;
