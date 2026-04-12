@@ -38,30 +38,19 @@ function decodeHtmlEntities(str: string): string {
     .replace(/&#x[0-9A-Fa-f]+;/g, "").replace(/&[a-z]+;/g, "").trim();
 }
 
-function extractTeamNames(html: string): [string | null, string | null] {
-  const matches = [...html.matchAll(/<div class="teamName">\s*([^<]+?)\s*<\/div>/g)];
-  const home = matches[0]?.[1] ? decodeHtmlEntities(matches[0][1]) : null;
-  const away = matches[1]?.[1] ? decodeHtmlEntities(matches[1][1]) : null;
-  return [home, away];
-}
-
-function extractTeamNamesWithIds(html: string): Array<{ name: string; clubId: string | null }> {
-  const matches = [...html.matchAll(/<div class="teamName">\s*([^<]+?)\s*<\/div>/g)];
-  const logos = [...html.matchAll(/clublogos\/(\d+)\.png/g)];
-  return matches.map((m, i) => ({
-    name: decodeHtmlEntities(m[1]),
-    clubId: logos[i]?.[1] ?? null,
-  }));
-}
-
 function extractCompetitionName(html: string): string | null {
   const m = html.match(/Turnering:\s*<\/span>\s*<a[^>]*>([^<]+)<\/a>/);
   return m ? decodeHtmlEntities(m[1]) : null;
 }
 
-function extractClubIds(html: string): [string | null, string | null] {
-  const matches = [...html.matchAll(/clublogos\/(\d+)\.png/g)];
-  return [matches[0]?.[1] ?? null, matches[1]?.[1] ?? null];
+function extractClubIdFromWrapper(wrapperHtml: string): string | null {
+  const m = wrapperHtml.match(/clublogos\/(\d+)\.png/);
+  return m?.[1] ?? null;
+}
+
+function extractTeamNameFromWrapper(wrapperHtml: string): string | null {
+  const m = wrapperHtml.match(/<h3>([^<]+)<\/h3>/);
+  return m ? decodeHtmlEntities(m[1]) : null;
 }
 
 function extractScore(html: string): { home: number | null; away: number | null; homeHt: number | null; awayHt: number | null } {
@@ -75,43 +64,6 @@ function extractScore(html: string): { home: number | null; away: number | null;
   };
 }
 
-function extractH2H(html: string): {
-  played: number; homeWins: number; draws: number; awayWins: number;
-  homeGoals: number; awayGoals: number;
-  recent: Array<{ date: string; homeTeam: string; awayTeam: string; homeScore: number; awayScore: number; competition: string }>;
-} | null {
-  // Summary stats
-  const playedM = html.match(/(\d+)\s*kamper/i);
-  if (!playedM) return null;
-
-  const winsMatches = [...html.matchAll(/(\d+)\s*seiere/gi)];
-  const goalsMatches = [...html.matchAll(/(\d+)\s*totalt/gi)];
-
-  const homeWins = winsMatches[0] ? parseInt(winsMatches[0][1]) : 0;
-  const awayWins = winsMatches[1] ? parseInt(winsMatches[1][1]) : 0;
-  const drawsM = html.match(/Uavgjort:[^0-9]*(\d+)/);
-  const draws = drawsM ? parseInt(drawsM[1]) : 0;
-  const homeGoals = goalsMatches[0] ? parseInt(goalsMatches[0][1]) : 0;
-  const awayGoals = goalsMatches[1] ? parseInt(goalsMatches[1][1]) : 0;
-
-  // Recent results
-  const recent: Array<{ date: string; homeTeam: string; awayTeam: string; homeScore: number; awayScore: number; competition: string }> = [];
-  const matchBlocks = [...html.matchAll(/(\d{2}\.\d{2}\.\d{2})[^<]*<\/[^>]+>[\s\S]*?(\d+)\s*-\s*(\d+)[\s\S]*?<[^>]+>\s*([^<]+?)\s*<\/[^>]+>[\s\S]*?<[^>]+>\s*([^<]+?)\s*<\/[^>]+>[\s\S]*?<[^>]+>\s*([^<]+?)\s*<\/[^>]+>/g)];
-
-  for (const m of matchBlocks.slice(0, 5)) {
-    recent.push({
-      date: m[1],
-      homeScore: parseInt(m[2]),
-      awayScore: parseInt(m[3]),
-      homeTeam: decodeHtmlEntities(m[4]),
-      awayTeam: decodeHtmlEntities(m[5]),
-      competition: decodeHtmlEntities(m[6]),
-    });
-  }
-
-  return { played: parseInt(playedM[1]), homeWins, draws, awayWins, homeGoals, awayGoals, recent };
-}
-
 function parseSide(html: string): Array<{ nff_player_id: string; name: string; shirt_no: number | null; role: "starter" | "substitute" }> {
   const players: Array<{ nff_player_id: string; name: string; shirt_no: number | null; role: "starter" | "substitute" }> = [];
   const subIdx = html.indexOf("Innbyttere");
@@ -121,7 +73,7 @@ function parseSide(html: string): Array<{ nff_player_id: string; name: string; s
   const parseSection = (sectionHtml: string, role: "starter" | "substitute") => {
     const items = sectionHtml.split('<div class="matchPlayerListItem">');
     for (const item of items.slice(1)) {
-      const idM   = item.match(/\/fotballdata\/person\/profil\/\?fiksId=(\d+)/);
+      const idM = item.match(/\/fotballdata\/person\/profil\/\?fiksId=(\d+)/);
       if (!idM) continue;
       const nameM = item.match(/class="playerName"[^>]*>\s*([^<]+?)\s*<\/a>/);
       const shirtM = item.match(/<div class="playerNumber">\s*(\d+)\s*<\/div>/);
@@ -142,17 +94,6 @@ function parseSide(html: string): Array<{ nff_player_id: string; name: string; s
   return players;
 }
 
-function extractPlayers(html: string) {
-  const homeStart = html.indexOf("homeTeamWrapper");
-  const awayStart = html.indexOf("awayTeamWrapper");
-  const homeHtml = homeStart !== -1 && awayStart !== -1 ? html.substring(homeStart, awayStart) : html;
-  const awayHtml = awayStart !== -1 ? html.substring(awayStart) : "";
-  return {
-    home: parseSide(homeHtml),
-    away: parseSide(awayHtml),
-  };
-}
-
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -161,24 +102,32 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Missing url param" }, { status: 400 });
     }
 
-    // Extract fiksId from URL
     const fiksMatch = inputUrl.match(/fiksId=(\d+)/);
     if (!fiksMatch) {
       return NextResponse.json({ error: "Could not find fiksId in URL" }, { status: 400 });
     }
     const fiksId = fiksMatch[1];
 
-    // Fetch match page
     const matchUrl = `https://www.fotball.no/fotballdata/kamp/?fiksId=${fiksId}`;
     const html = await fetchHtml(matchUrl);
 
-    const turneringIdx = html.indexOf("Turnering");
-    console.log("DEBUG turnering HTML:", html.substring(turneringIdx, turneringIdx + 300));
+    // Extract everything anchored to homeTeamWrapper / awayTeamWrapper
+    const homeWrapperIdx = html.indexOf("homeTeamWrapper");
+    const awayWrapperIdx = html.indexOf("awayTeamWrapper");
+    const homeWrapperHtml = homeWrapperIdx !== -1
+      ? html.substring(homeWrapperIdx, awayWrapperIdx !== -1 ? awayWrapperIdx : undefined)
+      : "";
+    const awayWrapperHtml = awayWrapperIdx !== -1 ? html.substring(awayWrapperIdx) : "";
 
-    const [homeName, awayName] = extractTeamNames(html);
-    const [homeClubId, awayClubId] = extractClubIds(html);
+    const homeName   = extractTeamNameFromWrapper(homeWrapperHtml);
+    const awayName   = extractTeamNameFromWrapper(awayWrapperHtml);
+    const homeClubId = extractClubIdFromWrapper(homeWrapperHtml);
+    const awayClubId = extractClubIdFromWrapper(awayWrapperHtml);
+
+    const homeSidePlayers = parseSide(homeWrapperHtml);
+    const awaySidePlayers = parseSide(awayWrapperHtml);
+
     const score = extractScore(html);
-    const { home: homePlayers, away: awayPlayers } = extractPlayers(html);
 
     // Look up match from DB for competition info and correct team IDs
     const { data: matchRow } = await supabaseAdmin
@@ -212,7 +161,6 @@ export async function GET(req: Request) {
         if (compByName) {
           competition = compByName;
         } else {
-          // Not in DB — try to infer from competition name (youth/cup)
           const youthMaleMatch = scrapedCompName.match(/G(\d+)/i);
           const youthFemaleMatch = scrapedCompName.match(/J(\d+)/i);
           if (youthMaleMatch || youthFemaleMatch) {
@@ -228,22 +176,7 @@ export async function GET(req: Request) {
       }
     }
 
-    if (!competition) {
-      const scrapedCompName = extractCompetitionName(html);
-      console.log("DEBUG scrapedCompName:", scrapedCompName);
-      if (scrapedCompName) {
-        const { data: compByName } = await supabaseAdmin
-          .from("competitions")
-          .select("nff_competition_id, tier, gender, name")
-          .ilike("name", `%${scrapedCompName}%`)
-          .maybeSingle();
-        console.log("DEBUG compByName:", compByName);
-        if (compByName) competition = compByName;
-      }
-    }
-
     console.log("DEBUG competition:", competition);
-    console.log("DEBUG compGender:", competition?.gender);
 
     const compTier   = competition?.tier   ?? null;
     const compGender = competition?.gender ?? (searchParams.get("gender") ?? null);
@@ -259,9 +192,26 @@ export async function GET(req: Request) {
     const resolvedHomeId = resolveId(homeClubId, matchRow?.home_team_nff_id ? String(matchRow.home_team_nff_id) : null);
     const resolvedAwayId = resolveId(awayClubId, matchRow?.away_team_nff_id ? String(matchRow.away_team_nff_id) : null);
 
+    // Name-based fallback if logo ID didn't resolve
+    const resolveByName = async (name: string | null, currentId: string | null): Promise<string | null> => {
+      if (currentId || !name) return currentId;
+      const { data } = await supabaseAdmin
+        .from("teams")
+        .select("nff_team_id")
+        .ilike("team_name", `%${name}%`)
+        .limit(1)
+        .maybeSingle();
+      return data?.nff_team_id ? String(data.nff_team_id) : null;
+    };
+
+    const [finalHomeId, finalAwayId] = await Promise.all([
+      resolveByName(homeName, resolvedHomeId),
+      resolveByName(awayName, resolvedAwayId),
+    ]);
+
     const teamNameMap = new Map<string, string>();
-    if (resolvedHomeId || resolvedAwayId) {
-      const ids = [resolvedHomeId, resolvedAwayId].filter(Boolean) as string[];
+    if (finalHomeId || finalAwayId) {
+      const ids = [finalHomeId, finalAwayId].filter(Boolean) as string[];
       const { data: teamRows } = await supabaseAdmin
         .from("computed_league_table")
         .select("nff_team_id, team_name")
@@ -272,52 +222,43 @@ export async function GET(req: Request) {
       }
     }
 
-    // Match scraped names to IDs by club logo position
-    const teamsFromHtml = extractTeamNamesWithIds(html);
-    const homeNameFromHtml = teamsFromHtml.find(t => t.clubId === homeClubId)?.name ?? null;
-    const awayNameFromHtml = teamsFromHtml.find(t => t.clubId === awayClubId)?.name ?? null;
+    const resolvedHomeName = homeName ?? (finalHomeId ? teamNameMap.get(finalHomeId) ?? null : null);
+    const resolvedAwayName = awayName ?? (finalAwayId ? teamNameMap.get(finalAwayId) ?? null : null);
 
-    // Fall back to DB name lookup if HTML matching failed
-    const resolvedHomeName = homeName ?? (resolvedHomeId && teamNameMap.get(resolvedHomeId)) ?? null;
-    const resolvedAwayName = awayName ?? (resolvedAwayId && teamNameMap.get(resolvedAwayId)) ?? null;
-
-    const home = {
-      starters: homePlayers.filter(p => p.role === "starter"),
-      bench:    homePlayers.filter(p => p.role === "substitute"),
-    };
-    const away = {
-      starters: awayPlayers.filter(p => p.role === "starter"),
-      bench:    awayPlayers.filter(p => p.role === "substitute"),
-    };
-
-    console.log("DEBUG ids:", { homeClubId, awayClubId, resolvedHomeId, resolvedAwayId, homeName, awayName });
+    console.log("DEBUG ids:", { homeClubId, awayClubId, finalHomeId, finalAwayId, homeName, awayName });
 
     return NextResponse.json({
       fiksId,
       inputUrl,
       fetchUrl: matchUrl,
       counts: {
-        startersHome: home.starters.length,
-        startersAway: away.starters.length,
-        benchHome:    home.bench.length,
-        benchAway:    away.bench.length,
+        startersHome: homeSidePlayers.filter(p => p.role === "starter").length,
+        startersAway: awaySidePlayers.filter(p => p.role === "starter").length,
+        benchHome:    homeSidePlayers.filter(p => p.role === "substitute").length,
+        benchAway:    awaySidePlayers.filter(p => p.role === "substitute").length,
       },
       teams: {
-        home: { nff_team_id: resolvedHomeId, team_name: resolvedHomeName },
-        away: { nff_team_id: resolvedAwayId, team_name: resolvedAwayName },
+        home: { nff_team_id: finalHomeId, team_name: resolvedHomeName },
+        away: { nff_team_id: finalAwayId, team_name: resolvedAwayName },
       },
       match: {
-        nff_match_id:    fiksId,
-        home_score:      score.home ?? matchRow?.home_score ?? null,
-        away_score:      score.away ?? matchRow?.away_score ?? null,
-        home_halftime:   score.homeHt,
-        away_halftime:   score.awayHt,
-        kickoff_at:      matchRow?.kickoff_at ?? null,
-        season_year:     matchRow?.season_year ?? null,
+        nff_match_id:  fiksId,
+        home_score:    score.home ?? matchRow?.home_score ?? null,
+        away_score:    score.away ?? matchRow?.away_score ?? null,
+        home_halftime: score.homeHt,
+        away_halftime: score.awayHt,
+        kickoff_at:    matchRow?.kickoff_at ?? null,
+        season_year:   matchRow?.season_year ?? null,
         competition,
       },
-      home,
-      away,
+      home: {
+        starters: homeSidePlayers.filter(p => p.role === "starter"),
+        bench:    homeSidePlayers.filter(p => p.role === "substitute"),
+      },
+      away: {
+        starters: awaySidePlayers.filter(p => p.role === "starter"),
+        bench:    awaySidePlayers.filter(p => p.role === "substitute"),
+      },
     });
   } catch (e: any) {
     console.error("lineups-from-report error:", e);
