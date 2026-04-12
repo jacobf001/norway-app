@@ -348,7 +348,15 @@ function bestTableRow(rows: TableRow[], teamId: string | null, preferCompId?: st
     const tierMatch = source.find(r => r.tier === preferTier);
     if (tierMatch) return tierMatch;
   }
-  return source.reduce((best, r) => !best || Number(r.played) > Number(best.played) ? r : best, null as TableRow | null);
+  return source.reduce((best, r) => {
+    if (!best) return r;
+    const bestTier = Number(best.tier ?? 99);
+    const rTier = Number(r.tier ?? 99);
+    if (rTier < bestTier) return r;
+    if (rTier === bestTier && Number(r.played) > Number(best.played)) return r;
+    return best;
+  }, null as TableRow | null);
+
 }
 
 function inferMatchTier(
@@ -655,6 +663,7 @@ export async function GET(req: Request) {
     const matchComp  = lineupJson.match?.competition ?? null;
     const matchGender = matchComp?.gender ?? null;
     const matchTier   = matchComp?.tier   ?? null;
+    console.log("DEBUG matchComp:", JSON.stringify(matchComp, null, 2));
     const isWomen     = isWomenGender(matchGender);
 
     const homeTeamId = teams.home.nff_team_id ? String(teams.home.nff_team_id) : null;
@@ -796,14 +805,9 @@ export async function GET(req: Request) {
     const homeTier = inferredTier ?? homeCurStr.tier ?? homePrevStr.tier ?? 3;
     const awayTier = inferredTier ?? awayCurStr.tier ?? awayPrevStr.tier ?? 3;
 
-    console.log("DEBUG tiers:", {
-      matchTier,
-      homeTier,
-      awayTier,
-      homeCurTable: homeCurTable?.tier,
-      awayCurTable: awayCurTable?.tier,
-      competition: matchComp,
-    });
+    // Display tier comes from actual table row, not match competition
+    const homeDisplayTier = homeCurStr.tier ?? homePrevStr.tier ?? homeTier;
+    const awayDisplayTier = awayCurStr.tier ?? awayPrevStr.tier ?? awayTier;
 
     const homeStrength = blendStrength(homeCurStr.strength, homePrevStr.strength, homeCurStr.played, homeTier);
     const awayStrength = blendStrength(awayCurStr.strength, awayPrevStr.strength, awayCurStr.played, awayTier);
@@ -1208,8 +1212,8 @@ export async function GET(req: Request) {
       overall: { home: homeOverall, away: awayOverall },
       teamStrength: { home: homeRating.effectiveStrength, away: awayRating.effectiveStrength },
       teamStrengthDebug: {
-        home: { tier: homeTier, strength: homeStrength, position: homeCurStr.position, played: homeCurStr.played, points: homeCurStr.points, ppm: homeCurStr.ppm, competition_name: homeCurTable?.competition_name ?? homePrevTable?.competition_name ?? null },
-        away: { tier: awayTier, strength: awayStrength, position: awayCurStr.position, played: awayCurStr.played, points: awayCurStr.points, ppm: awayCurStr.ppm, competition_name: awayCurTable?.competition_name ?? awayPrevTable?.competition_name ?? null },
+        home: { tier: homeDisplayTier, strength: homeStrength, position: homeCurStr.position, played: homeCurStr.played, points: homeCurStr.points, ppm: homeCurStr.ppm, competition_name: homeCurTable?.competition_name ?? homePrevTable?.competition_name ?? null },
+        away: { tier: awayDisplayTier, strength: awayStrength, position: awayCurStr.position, played: awayCurStr.played, points: awayCurStr.points, ppm: awayCurStr.ppm, competition_name: awayCurTable?.competition_name ?? awayPrevTable?.competition_name ?? null },
       },
       ...pricing,
       goals: goalsModel,

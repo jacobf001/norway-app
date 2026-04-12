@@ -196,26 +196,85 @@ function ModelCard({ analysis }: { analysis: any }) {
   const p = analysis.probabilities;
   const odds = analysis.odds;
   const goals = analysis.goals;
-  const [marketOdds, setMarketOdds] = useState({ home: "", draw: "", away: "" });
+  const [marketOdds, setMarketOdds] = useState({ home: "", away: "", over15: "", over25: "", over35: "" });
+  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
   const homeStrength = analysis.teamStrengthDebug?.home?.strength ?? 0;
   const awayStrength = analysis.teamStrengthDebug?.away?.strength ?? 0;
   const homeName = analysis.teams?.home?.team_name ?? "Home";
   const awayName = analysis.teams?.away?.team_name ?? "Away";
-
+ 
   function calcEdge(marketOdd: string, modelProb: number) {
     const mo = Number(marketOdd);
     if (!mo || mo <= 1 || !modelProb) return null;
     const edge = (mo / (1 / modelProb) - 1) * 100;
     return { edge, value: edge >= 5 };
   }
-
+ 
+  async function savePrediction() {
+    setSaving(true);
+    setSaveStatus("idle");
+    try {
+      const payload = {
+        fiks_id: analysis.match?.nff_match_id ?? null,
+        home_team: homeName,
+        away_team: awayName,
+        home_team_id: analysis.teams?.home?.nff_team_id ?? null,
+        away_team_id: analysis.teams?.away?.nff_team_id ?? null,
+        kickoff_at: analysis.match?.kickoff_at ?? null,
+        model_home_prob: p?.home ?? null,
+        model_away_prob: p?.away ?? null,
+        model_draw_prob: p?.draw ?? null,
+        fair_home_odds: odds?.home ?? null,
+        fair_away_odds: odds?.away ?? null,
+        fair_draw_odds: odds?.draw ?? null,
+        fair_over15_odds: goals?.markets?.over15?.odds ?? null,
+        fair_over25_odds: goals?.markets?.over25?.odds ?? null,
+        fair_over35_odds: goals?.markets?.over35?.odds ?? null,
+        model_over15_prob: goals?.markets?.over15?.prob ?? null,
+        model_over25_prob: goals?.markets?.over25?.prob ?? null,
+        model_over35_prob: goals?.markets?.over35?.prob ?? null,
+        market_home_odds: marketOdds.home ? Number(marketOdds.home) : null,
+        market_away_odds: marketOdds.away ? Number(marketOdds.away) : null,
+        market_over15_odds: marketOdds.over15 ? Number(marketOdds.over15) : null,
+        market_over25_odds: marketOdds.over25 ? Number(marketOdds.over25) : null,
+        market_over35_odds: marketOdds.over35 ? Number(marketOdds.over35) : null,
+        edge_home: marketOdds.home ? calcEdge(marketOdds.home, p?.home)?.edge ?? null : null,
+        edge_away: marketOdds.away ? calcEdge(marketOdds.away, p?.away)?.edge ?? null : null,
+        edge_over15: marketOdds.over15 ? calcEdge(marketOdds.over15, goals?.markets?.over15?.prob)?.edge ?? null : null,
+        edge_over25: marketOdds.over25 ? calcEdge(marketOdds.over25, goals?.markets?.over25?.prob)?.edge ?? null : null,
+        edge_over35: marketOdds.over35 ? calcEdge(marketOdds.over35, goals?.markets?.over35?.prob)?.edge ?? null : null,
+        value_home: marketOdds.home ? (calcEdge(marketOdds.home, p?.home)?.value ?? false) : false,
+        value_away: marketOdds.away ? (calcEdge(marketOdds.away, p?.away)?.value ?? false) : false,
+        value_over15: marketOdds.over15 ? (calcEdge(marketOdds.over15, goals?.markets?.over15?.prob)?.value ?? false) : false,
+        value_over25: marketOdds.over25 ? (calcEdge(marketOdds.over25, goals?.markets?.over25?.prob)?.value ?? false) : false,
+        value_over35: marketOdds.over35 ? (calcEdge(marketOdds.over35, goals?.markets?.over35?.prob)?.value ?? false) : false,
+      };
+      const res = await fetch("/api/predictions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("Failed to save");
+      setSaveStatus("saved");
+      setTimeout(() => {
+        window.location.href = "/predictions";
+      }, 800);
+    } catch {
+      setSaveStatus("error");
+      setTimeout(() => setSaveStatus("idle"), 3000);
+    } finally {
+      setSaving(false);
+    }
+  }
+ 
   return (
     <div className="rounded-2xl border border-white/8 bg-white/3 p-6">
       <div className="flex items-center justify-between mb-5">
         <h3 className="text-base font-semibold">Prediction</h3>
         <div className="text-xs font-mono text-white/30 uppercase tracking-wider">Norway model</div>
       </div>
-
+ 
       {p && (
         <div className="mb-6">
           <div className="flex justify-between text-sm mb-2">
@@ -230,7 +289,7 @@ function ModelCard({ analysis }: { analysis: any }) {
           </div>
         </div>
       )}
-
+ 
       {odds && (
         <div className="flex items-center gap-4 pb-4 border-b border-white/5">
           <span className="text-xs text-white/30 font-mono uppercase tracking-wider">Match odds</span>
@@ -241,14 +300,13 @@ function ModelCard({ analysis }: { analysis: any }) {
           </div>
         </div>
       )}
-
+ 
       {p && (
         <div className="mt-4 pb-4 border-b border-white/5">
           <div className="text-xs text-white/30 font-mono uppercase tracking-wider mb-3">Market odds</div>
           <div className="flex gap-3">
             {([
               { label: "H", key: "home" as const, prob: p.home, nameColor: "text-blue-300" },
-              { label: "D", key: "draw" as const, prob: p.draw, nameColor: "text-white/50" },
               { label: "A", key: "away" as const, prob: p.away, nameColor: "text-orange-300" },
             ]).map(({ label, key, prob, nameColor }) => {
               const edge = calcEdge(marketOdds[key], prob);
@@ -263,7 +321,7 @@ function ModelCard({ analysis }: { analysis: any }) {
           </div>
         </div>
       )}
-
+ 
       {goals && (
         <div className="mt-4 pb-4 border-b border-white/5">
           <div className="flex items-center justify-between mb-3">
@@ -275,14 +333,15 @@ function ModelCard({ analysis }: { analysis: any }) {
               <span className="text-white/30 text-xs">({goals.expectedTotal} total)</span>
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-2">
+ 
+          {/* Goals market display grid */}
+          <div className="grid grid-cols-3 gap-2 mb-3">
             {[
               { label: "Over 1.5", prob: goals.markets.over15.prob, odds: goals.markets.over15.odds },
               { label: "Over 2.5", prob: goals.markets.over25.prob, odds: goals.markets.over25.odds },
               { label: "Over 3.5", prob: goals.markets.over35.prob, odds: goals.markets.over35.odds },
-              { label: "Under 2.5", prob: goals.markets.under25.prob, odds: goals.markets.under25.odds },
               { label: "BTTS Yes", prob: goals.markets.btts_yes.prob, odds: goals.markets.btts_yes.odds },
-              { label: "BTTS No", prob: goals.markets.btts_no.prob, odds: goals.markets.btts_no.odds },
+              { label: "BTTS No",  prob: goals.markets.btts_no.prob,  odds: goals.markets.btts_no.odds },
             ].map(({ label, prob, odds: mOdds }) => {
               const pctNum = Math.round(prob * 100);
               const isFav = prob >= 0.55;
@@ -300,9 +359,28 @@ function ModelCard({ analysis }: { analysis: any }) {
               );
             })}
           </div>
+ 
+          {/* Over market odds inputs */}
+          <div className="flex gap-3">
+            {([
+              { label: "O1.5", key: "over15" as const, prob: goals.markets.over15.prob },
+              { label: "O2.5", key: "over25" as const, prob: goals.markets.over25.prob },
+              { label: "O3.5", key: "over35" as const, prob: goals.markets.over35.prob },
+            ]).map(({ label, key, prob }) => {
+              const edge = calcEdge(marketOdds[key], prob);
+              return (
+                <div key={key} className="flex-1">
+                  <div className="text-xs font-mono mb-1.5 text-white/40">{label} <span className="text-white/25">fair {(1 / prob).toFixed(2)}</span></div>
+                  <input className="w-full rounded-lg border border-white/10 bg-black/60 px-2 py-1.5 text-sm font-mono focus:border-white/30 focus:outline-none" placeholder="1.80" value={marketOdds[key]} onChange={(e) => setMarketOdds(prev => ({ ...prev, [key]: e.target.value }))} />
+                  {edge && <div className={clsx("mt-1.5 text-xs font-mono font-semibold", edge.value ? "text-teal-400" : edge.edge > 0 ? "text-white/40" : "text-red-400/60")}>{edge.edge >= 0 ? "+" : ""}{edge.edge.toFixed(1)}%{edge.value && <span className="ml-1">✓</span>}</div>}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
-
+ 
+      {/* Strength bars */}
       <div className="mt-4 grid grid-cols-2 gap-3">
         {([
           { name: homeName, strength: homeStrength, tier: analysis.teamStrengthDebug?.home?.tier, color: "blue" as const },
@@ -326,9 +404,29 @@ function ModelCard({ analysis }: { analysis: any }) {
           );
         })}
       </div>
+ 
+      {/* Save button */}
+      <div className="mt-4 pt-4 border-t border-white/5 flex items-center justify-between">
+        <p className="text-xs text-white/30">Save prediction + entered odds to tracker</p>
+        <button
+          type="button"
+          onClick={savePrediction}
+          disabled={saving}
+          className={clsx(
+            "rounded-lg px-4 py-2 text-sm font-semibold transition-all",
+            saveStatus === "saved" ? "bg-teal-600 text-white" :
+            saveStatus === "error" ? "bg-red-900/60 text-red-300" :
+            saving ? "bg-white/8 text-white/30 cursor-not-allowed" :
+            "bg-white/10 text-white hover:bg-white/15 active:scale-95"
+          )}
+        >
+          {saving ? "Saving…" : saveStatus === "saved" ? "✓ Saved" : saveStatus === "error" ? "Error" : "Save Prediction"}
+        </button>
+      </div>
     </div>
   );
 }
+
 
 function MissingLikelyXI({ title, items, accent }: {
   title: string;
