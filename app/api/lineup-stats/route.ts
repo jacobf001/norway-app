@@ -349,8 +349,8 @@ function bestTableRow(rows: TableRow[], teamId: string | null, preferCompId?: st
     const tierMatch = source.find(r => r.tier === preferTier);
     if (tierMatch) return tierMatch;
   }
-  // Instead of picking lowest tier, pick closest to preferTier
-  return source.reduce((best, r) => {
+    // Instead of picking lowest tier, pick closest to preferTier
+    return source.reduce((best, r) => {
     if (!best) return r;
     if (preferTier != null) {
       const bestDiff = Math.abs(Number(best.tier ?? 99) - preferTier);
@@ -548,16 +548,16 @@ function computeGoals(params: {
   const TIER_AVG: Record<number, number> = { 1: 0.42, 2: 0.35, 3: 0.22, 4: 0.14, 5: 0.08, 6: 0.05 };
   const homeAvg = TIER_AVG[params.homeTier] ?? 0.18;
   const awayAvg = TIER_AVG[params.awayTier] ?? 0.18;
-  let homeXG = hB[0] * clamp(1 + (params.homeStrength - homeAvg) * 2.0, 0.6, 1.6);
-  let awayXG = aB[1] * clamp(1 + (params.awayStrength - awayAvg) * 2.0, 0.6, 1.6);
+  let homeXG = hB[0] * clamp(1 + (params.homeStrength - homeAvg) * 1.5, 0.75, 1.5);
+  let awayXG = aB[1] * clamp(1 + (params.awayStrength - awayAvg) * 1.5, 0.75, 1.5);
 
   // Reduce xG based on missing goalscorers — cap at 20% reduction
-  if (params.homeMissingGoals) {
-    homeXG = homeXG * (1 - clamp(params.homeMissingGoals / Math.max(0.01, hB[0] * 2), 0, 0.20));
-  }
-  if (params.awayMissingGoals) {
-    awayXG = awayXG * (1 - clamp(params.awayMissingGoals / Math.max(0.01, aB[1] * 2), 0, 0.20));
-  }
+  //if (params.homeMissingGoals) {
+    //homeXG = homeXG * (1 - clamp(params.homeMissingGoals / Math.max(0.01, hB[0] * 2), 0, 0.10));
+  //}
+  //if (params.awayMissingGoals) {
+    //awayXG = awayXG * (1 - clamp(params.awayMissingGoals / Math.max(0.01, aB[1] * 2), 0, 0.10));
+  //}
 
   const MAX = 6;
   let p_over15 = 0, p_over25 = 0, p_over35 = 0, p_btts = 0, p_under25 = 0;
@@ -1177,6 +1177,15 @@ export async function GET(req: Request) {
       awayAvgCeiling,
       women: effectiveIsWomen,
       sameCompetition,
+    });
+
+    console.log("DEBUG goals inputs:", {
+      homeTier,
+      awayTier,
+      homeStrength: homeRating.effectiveStrength,
+      awayStrength: awayRating.effectiveStrength,
+      homeMissingGoals,
+      awayMissingGoals,
     });
 
     const goalsModel = computeGoals({
