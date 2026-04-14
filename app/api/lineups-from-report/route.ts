@@ -49,7 +49,7 @@ function extractClubIdFromWrapper(wrapperHtml: string): string | null {
 }
 
 function extractTeamNameFromWrapper(wrapperHtml: string): string | null {
-  const m = wrapperHtml.match(/<h3>([^<]+)<\/h3>/);
+  const m = wrapperHtml.match(/<h3>\s*([^<]+?)\s*<\/h3>/);
   return m ? decodeHtmlEntities(m[1]) : null;
 }
 
@@ -118,6 +118,12 @@ export async function GET(req: Request) {
       ? html.substring(homeWrapperIdx, awayWrapperIdx !== -1 ? awayWrapperIdx : undefined)
       : "";
     const awayWrapperHtml = awayWrapperIdx !== -1 ? html.substring(awayWrapperIdx) : "";
+
+    console.log("DEBUG wrappers:", {
+      homeWrapperIdx,
+      awayWrapperIdx,
+      homeNameRaw: homeWrapperHtml.substring(0, 200),
+    });
 
     const homeName   = extractTeamNameFromWrapper(homeWrapperHtml);
     const awayName   = extractTeamNameFromWrapper(awayWrapperHtml);
@@ -209,20 +215,36 @@ export async function GET(req: Request) {
           const expected = name.toLowerCase();
           const firstWord = expected.split(" ")[0];
           if (dbName.includes(firstWord) || expected.includes(dbName.split(" ")[0])) {
-            return String(data.nff_team_id); // Logo ID validated
+            return String(data.nff_team_id);
           }
         }
       }
 
-      // Fall back to name lookup
       if (!name) return null;
+
+      // Exact name match
       const { data: exact } = await supabaseAdmin
         .from("teams").select("nff_team_id").eq("team_name", name).limit(1).maybeSingle();
       if (exact?.nff_team_id) return String(exact.nff_team_id);
 
+      // Partial match — only accept if all words in the search name are in the DB name
       const { data: partial } = await supabaseAdmin
-        .from("teams").select("nff_team_id").ilike("team_name", `%${name}%`).limit(1).maybeSingle();
-      return partial?.nff_team_id ? String(partial.nff_team_id) : null;
+        .from("teams").select("nff_team_id, team_name").ilike("team_name", `%${name}%`).limit(1).maybeSingle();
+      if (partial?.nff_team_id) {
+        const dbName = (partial.team_name ?? "").toLowerCase();
+        const allWordsMatch = name.toLowerCase().split(" ").every(w => dbName.includes(w));
+        if (allWordsMatch) return String(partial.nff_team_id);
+      }
+
+      // Last resort — strip reserve suffix e.g. "Åsane 2" → "Åsane"
+      if (name.endsWith(" 2")) {
+        const baseName = name.slice(0, -2).trim();
+        const { data: base } = await supabaseAdmin
+          .from("teams").select("nff_team_id").eq("team_name", baseName).maybeSingle();
+        if (base?.nff_team_id) return String(base.nff_team_id);
+      }
+
+      return null;
     };
 
     const [finalHomeId, finalAwayId] = await Promise.all([

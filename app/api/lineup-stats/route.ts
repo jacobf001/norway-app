@@ -539,6 +539,9 @@ function computeGoals(params: {
   let homeXG = hB[0] * clamp(1 + (params.homeStrength - homeAvg) * 1.5, 0.75, 1.5);
   let awayXG = aB[1] * clamp(1 + (params.awayStrength - awayAvg) * 1.5, 0.75, 1.5);
 
+  homeXG = homeXG * (1 - clamp((params.homeMissingGoals ?? 0) / Math.max(0.01, hB[0] * 2), 0, 0.08));
+  awayXG = awayXG * (1 - clamp((params.awayMissingGoals ?? 0) / Math.max(0.01, aB[1] * 2), 0, 0.08));   
+
   // Reduce xG based on missing goalscorers — cap at 20% reduction
   //if (params.homeMissingGoals) {
     //homeXG = homeXG * (1 - clamp(params.homeMissingGoals / Math.max(0.01, hB[0] * 2), 0, 0.10));
