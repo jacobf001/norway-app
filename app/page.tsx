@@ -546,27 +546,25 @@ function PlayerAnalysisTable({ title, rows, accent, tierCeiling }: { title: stri
                     <tr className="border-t border-white/5 bg-black/20">
                       <td />
                       <td colSpan={6} className="px-3 py-3 text-xs text-white/50 space-y-1">
-                        {p.recent5 && <div className="flex items-center gap-2 mb-1"><span className="text-white/30">Last 5:</span><span>{p.recent5.lastNMinutes}m in {p.recent5.lastNApps} apps ({p.recent5.lastNStarts} starts)</span></div>}
-                        {(p.seasons ?? []).length > 0 ? (() => {
-                          const years = [...new Set((p.seasons ?? []).map((s: any) => s.season_year))] as number[];
-                          return p.seasons.map((s: any, i: number) => {
-                            const yearIdx = years.indexOf(s.season_year);
-                            const yearColor = yearIdx === 0 ? "text-white/70" : "text-white/35";
-                            const rowBg = yearIdx === 0 ? "" : "opacity-80";
-                            return (
-                              <div key={i} className={clsx("flex gap-2 items-center", rowBg)}>
-                                <span className={clsx("w-10 shrink-0 font-mono", yearIdx === 0 ? "text-sky-400/70" : "text-white/25")}>{s.season_year}</span>
-                                <span className={clsx("flex-1 truncate", yearColor)}>{s.team_name ?? "—"}{s.tier ? ` · Tier ${s.tier}` : ""}{s.position ? ` · Pos ${s.position}` : ""}</span>
-                                <span className={clsx("shrink-0 w-16 text-right", yearColor)}>{s.minutes ? `${s.minutes}m` : "—"}</span>
-                                <span className={clsx("shrink-0 w-6 text-right", yearColor)}>{s.starts ?? "—"}gs</span>
-                                <span className="text-emerald-400/70 shrink-0 w-6 text-right">{s.goals ?? 0}g</span>
-                                <span className={clsx("font-mono shrink-0 w-12 text-right text-xs", s.ceiling > 0 && s.importance / s.ceiling >= 0.8 ? "text-emerald-400" : s.ceiling > 0 && s.importance / s.ceiling >= 0.5 ? "text-sky-400" : "text-white/40")}>
-                                  {s.importance}/{s.ceiling}
-                                </span>
-                              </div>
-                            );
-                          });
-                        })() : <div className="text-white/30">No season data</div>}
+                        {p.recent5 && (
+                          <div className="text-white/40 mb-2">
+                            Last 5: {p.recent5.lastNMinutes}m in {p.recent5.lastNApps} apps ({p.recent5.lastNStarts} starts)
+                          </div>
+                        )}
+                        {(p.seasons ?? []).length > 0 ? p.seasons.map((s: any, i: number) => (
+                          <div key={i} className="flex flex-wrap gap-x-2 gap-y-0.5 items-baseline">
+                            <span className={`font-mono shrink-0 ${i === 0 ? "text-sky-400/70" : "text-white/25"}`}>{s.season_year}</span>
+                            <span className="text-white/60 shrink-0">{s.team_name ?? "—"}</span>
+                            {s.tier && <span className="text-white/30">T{s.tier}</span>}
+                            {s.position && <span className="text-white/30">Pos {s.position}</span>}
+                            {s.minutes > 0 && <span className="text-white/40">{s.minutes}m</span>}
+                            {s.starts > 0 && <span className="text-white/40">{s.starts}gs</span>}
+                            {s.goals > 0 && <span className="text-emerald-400/70">⚽{s.goals}</span>}
+                            <span className={`font-mono ml-auto ${s.ceiling > 0 && s.importance / s.ceiling >= 0.8 ? "text-emerald-400" : s.ceiling > 0 && s.importance / s.ceiling >= 0.5 ? "text-sky-400" : "text-white/40"}`}>
+                              {s.importance}/{s.ceiling}
+                            </span>
+                          </div>
+                        )) : <div className="text-white/30">No season data</div>}
                       </td>
                     </tr>
                   )}
