@@ -193,20 +193,41 @@ export async function GET(req: Request) {
     const resolvedAwayId = resolveId(awayClubId, matchRow?.away_team_nff_id ? String(matchRow.away_team_nff_id) : null);
 
     // Name-based fallback if logo ID didn't resolve
-    const resolveByName = async (name: string | null, currentId: string | null): Promise<string | null> => {
-      if (currentId || !name) return currentId;
-      const { data } = await supabaseAdmin
-        .from("teams")
-        .select("nff_team_id")
-        .ilike("team_name", `%${name}%`)
-        .limit(1)
-        .maybeSingle();
-      return data?.nff_team_id ? String(data.nff_team_id) : null;
+    const validateAndResolve = async (logoId: string | null, name: string | null, dbId: string | null): Promise<string | null> => {
+      // DB match ID takes priority always
+      if (dbId) return dbId;
+
+      // If we have a logo ID, validate it matches the expected team name
+      if (logoId) {
+        const { data } = await supabaseAdmin
+          .from("teams")
+          .select("nff_team_id, team_name")
+          .eq("nff_team_id", logoId)
+          .maybeSingle();
+        if (data?.nff_team_id && data.team_name && name) {
+          const dbName = data.team_name.toLowerCase();
+          const expected = name.toLowerCase();
+          const firstWord = expected.split(" ")[0];
+          if (dbName.includes(firstWord) || expected.includes(dbName.split(" ")[0])) {
+            return String(data.nff_team_id); // Logo ID validated
+          }
+        }
+      }
+
+      // Fall back to name lookup
+      if (!name) return null;
+      const { data: exact } = await supabaseAdmin
+        .from("teams").select("nff_team_id").eq("team_name", name).limit(1).maybeSingle();
+      if (exact?.nff_team_id) return String(exact.nff_team_id);
+
+      const { data: partial } = await supabaseAdmin
+        .from("teams").select("nff_team_id").ilike("team_name", `%${name}%`).limit(1).maybeSingle();
+      return partial?.nff_team_id ? String(partial.nff_team_id) : null;
     };
 
     const [finalHomeId, finalAwayId] = await Promise.all([
-      resolveByName(homeName, resolvedHomeId),
-      resolveByName(awayName, resolvedAwayId),
+      validateAndResolve(homeClubId, homeName, matchRow?.home_team_nff_id ? String(matchRow.home_team_nff_id) : null),
+      validateAndResolve(awayClubId, awayName, matchRow?.away_team_nff_id ? String(matchRow.away_team_nff_id) : null),
     ]);
 
     const teamNameMap = new Map<string, string>();

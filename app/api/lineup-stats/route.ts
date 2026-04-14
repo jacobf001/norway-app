@@ -145,16 +145,21 @@ function calcImportance(params: {
   minutes: number; starts: number; goals: number;
   yellows: number; reds: number; maxGames: number; ceiling: number;
 }): number {
-  const maxMins     = params.maxGames * 90;
-  const minutesN    = clamp01(params.minutes / Math.max(1, maxMins));
-  const startsN     = clamp01(params.starts  / Math.max(1, params.maxGames));
-  const startsDominant = startsN >= 0.75
-    ? Math.min(startsN * 1.1, 1.0)
-    : startsN * 0.85;
-  const goalsBoost  = clamp01(params.goals / 15) * 0.08;
+  const maxMins = params.maxGames * 90;
+  const minutesN = clamp01(params.minutes / Math.max(1, maxMins));
+  const startsN = clamp01(params.starts / Math.max(1, params.maxGames));
+  const minsPerGame = params.maxGames > 0 ? params.minutes / params.maxGames : 0;
+
+  // Use whichever is higher — starts ratio or minutes-per-game ratio (out of 90)
+  const participationN = Math.max(startsN, clamp01(minsPerGame / 90));
+  const startsDominant = participationN >= 0.60
+    ? Math.min(participationN * 1.1, 1.0)
+    : participationN;
+
+  const goalsBoost = clamp01(params.goals / 10) * 0.20;
   const cardPenalty = clamp01(params.yellows * 0.02 + params.reds * 0.08);
 
-  const raw = minutesN * 0.30 + startsDominant * 0.65 + goalsBoost - cardPenalty;
+  const raw = minutesN * 0.50 + startsDominant * 0.45 + goalsBoost - cardPenalty;
   return Math.min(Math.max(0, Math.round(raw * params.ceiling)), params.ceiling);
 }
 
@@ -175,45 +180,28 @@ function pickBestTier(rows: NormalizedSeasonRow[]): { tier: number | null; women
 function calcWeightedImportance(rows: NormalizedSeasonRow[], seasonYearCtx: number): {
   importance: number; ceiling: number; tier: number | null; women: boolean;
 } {
-  if (!rows.length) return { importance: 0, ceiling: 100, tier: null, women: false };
+  // Filter out unused subs — rows with no minutes and no starts are meaningless
+  const activeRows = rows.filter(r => Number(r.minutes ?? 0) > 0 || Number(r.starts ?? 0) > 0);
+  if (!activeRows.length) return { importance: 0, ceiling: 100, tier: null, women: false };
 
-  const { tier, women } = pickBestTier(rows);
+  const { tier, women } = pickBestTier(activeRows);
   const ceiling  = tier ? tierBaseCeiling(tier, women) : 64;
 
-  // Use actual appearances to derive maxGames — more accurate than hardcoded tier values
-  const totalApps   = rows.reduce((s, r) => s + r.appearances, 0);
-  const tierMax     = tier ? maxGamesForTier(tier, women) : 22;
-  const maxGames    = Math.min(Math.max(totalApps, tierMax * 0.6), tierMax);
+  const tierMax  = tier ? maxGamesForTier(tier, women) : 22;
+  const totalStarts = activeRows.reduce((s, r) => s + r.starts, 0);
+  const maxGames = Math.min(Math.max(totalStarts, tierMax * 0.6), tierMax);
 
   const youthDiscount = tier && isYouthTier(tier) ? 0.5 : 1.0;
-  const totalMins   = rows.reduce((s, r) => s + r.minutes,       0) * youthDiscount;
-  const totalStarts = rows.reduce((s, r) => s + r.starts,        0) * youthDiscount;
-  const totalGoals  = rows.reduce((s, r) => s + r.goals,         0) * youthDiscount;
-  const totalYellow = rows.reduce((s, r) => s + r.yellow_cards,  0);
-  const totalRed    = rows.reduce((s, r) => s + r.red_cards,     0);
+  const totalMins   = activeRows.reduce((s, r) => s + r.minutes,      0) * youthDiscount;
+  const totalGoals  = activeRows.reduce((s, r) => s + r.goals,        0) * youthDiscount;
+  const totalYellow = activeRows.reduce((s, r) => s + r.yellow_cards, 0);
+  const totalRed    = activeRows.reduce((s, r) => s + r.red_cards,    0);
 
   const importance = calcImportance({
-    minutes: totalMins, starts: totalStarts, goals: totalGoals,
+    minutes: totalMins, starts: totalStarts * youthDiscount, goals: totalGoals,
     yellows: totalYellow, reds: totalRed, maxGames, ceiling,
   });
   return { importance: Math.min(importance, ceiling), ceiling, tier, women };
-}
-
-
-// ── Evidence scoring — how well do we know this player at this team/tier? ──
-
-function evidenceScore(rows: NormalizedSeasonRow[], teamId?: string | null, compId?: string | null): number {
-  return rows.reduce((sum, r) => {
-    const tier = r.tier ?? 5;
-    let tierWeight = tier <= 1 ? 1.25 : tier === 2 ? 1.1 : tier === 3 ? 1.0
-      : tier === 4 ? 0.82 : tier === 5 ? 0.65 : 0.35;
-    const sameTeam = teamId != null && String(r.nff_team_id ?? "") === String(teamId);
-    const sameComp = compId != null && String(r.nff_competition_id ?? "") === String(compId);
-    let contextWeight = 1.0;
-    if (sameTeam) contextWeight += 0.25;
-    if (sameComp) contextWeight += 0.15;
-    return sum + (r.minutes + r.starts * 90 + r.appearances * 20) * tierWeight * contextWeight;
-  }, 0);
 }
 
 function pickPreferredRows(
@@ -463,7 +451,7 @@ function computeOdds(params: {
   const MISS_CEILINGS: Record<number, number> = { 1: 92, 2: 78, 3: 64, 4: 55, 5: 45, 6: 36 };
   const homeMissN  = clamp(params.homeMissingImpact / ((MISS_CEILINGS[params.homeTier] ?? 50) * 7), 0, 1);
   const awayMissN  = clamp(params.awayMissingImpact / ((MISS_CEILINGS[params.awayTier] ?? 50) * 7), 0, 1);  
-  const missingAdj = clamp((awayMissN - homeMissN) * 1.2, -1.0, 1.0) * 0.7;
+  const missingAdj = clamp((awayMissN - homeMissN) * 1.2, -1.0, 1.0) * 0.40;
 
   const isNewSeason = params.homePlayed <= 3 || params.awayPlayed <= 3;
   const playedWeight = isNewSeason 
@@ -818,8 +806,11 @@ export async function GET(req: Request) {
     const homeDisplayTier = homeCurStr.tier ?? homePrevStr.tier ?? homeTier;
     const awayDisplayTier = awayCurStr.tier ?? awayPrevStr.tier ?? awayTier;
 
-    const homeStrength = blendStrength(homeCurStr.strength, homePrevStr.strength, homeCurStr.played, homeTier);
-    const awayStrength = blendStrength(awayCurStr.strength, awayPrevStr.strength, awayCurStr.played, awayTier);
+    const homeEffectivePlayed = homeCurStr.tier === homeTier ? homeCurStr.played : 0;
+    const awayEffectivePlayed = awayCurStr.tier === awayTier ? awayCurStr.played : 0;
+
+    const homeStrength = blendStrength(homeCurStr.strength, homePrevStr.strength, homeEffectivePlayed, homeTier);
+    const awayStrength = blendStrength(awayCurStr.strength, awayPrevStr.strength, awayEffectivePlayed, awayTier);
 
     // ── Step 4: Enrich each player ─────────────────────────────────────────
     function enrich(p: LineupPlayer, side: "home" | "away") {
@@ -892,24 +883,23 @@ export async function GET(req: Request) {
         importance = Math.min(importance, 10);
       }
 
-      // ── Finland-style tier ceiling logic ──────────────────────────────────
       // Find the player's highest proven tier (with sufficient evidence)
-      const tierRowsForCap = [...broadCurRows, ...broadPrevRows].length > 0
+      const tierRowsForCap = ([...broadCurRows, ...broadPrevRows].filter(r => Number(r.minutes ?? 0) > 0 || Number(r.starts ?? 0) > 0).length > 0
         ? [...broadCurRows, ...broadPrevRows]
-        : [...calcCurRows, ...calcPrevRows];
+        : [...calcCurRows, ...calcPrevRows])
+        .filter(r => Number(r.minutes ?? 0) > 0 || Number(r.starts ?? 0) > 0);
 
       const playerHighestTier = tierRowsForCap.reduce((best, r) => {
-        const t = r.tier ?? 99;
-        if (t >= 90) return best;
-        const mins   = Number(r.minutes ?? 0);
-        const starts = Number(r.starts ?? 0);
-        const apps   = Number(r.appearances ?? 0);
-        const hasEvidence = mins >= 450 || starts >= 5;
-        return hasEvidence && t < best ? t : best;
-      }, 99);
+      const t = r.tier ?? 99;
+      if (t >= 90) return best;
+      const mins   = Number(r.minutes ?? 0);
+      const starts = Number(r.starts ?? 0);
+      const hasEvidence = mins >= 450 || (starts >= 5 && mins >= 200);
+      return hasEvidence && t < best ? t : best;
+    }, 99);
 
       const playerEvidenceScore = tierRowsForCap.reduce((sum, r) => {
-        return sum + Number(r.minutes ?? 0) + Number(r.starts ?? 0) * 90 + Number(r.appearances ?? 0) * 20;
+        return sum + Number(r.minutes ?? 0) + Number(r.starts ?? 0) * 90;
       }, 0);
 
       if (sideTier < 99) {
@@ -1160,7 +1150,8 @@ export async function GET(req: Request) {
     });
 
     const pricing = computeOdds({
-      homeTier, awayTier,
+      homeTier: homeCurStr.tier ?? homeTier,
+      awayTier: awayCurStr.tier ?? awayTier,
       homeStrength: homeRating.effectiveStrength,
       awayStrength: awayRating.effectiveStrength,
       homeMissingImpact: homeMissing.missingImpact,
@@ -1189,7 +1180,8 @@ export async function GET(req: Request) {
     });
 
     const goalsModel = computeGoals({
-      homeTier, awayTier,
+      homeTier: homeCurStr.tier ?? homeTier,
+      awayTier: awayCurStr.tier ?? awayTier,
       homeStrength: homeRating.effectiveStrength,
       awayStrength: awayRating.effectiveStrength,
       homeMissingGoals,
