@@ -992,9 +992,10 @@ export async function GET(req: Request) {
           return minsB - minsA;
         })
         .slice(0, 5)
-        .map(([, rows]) => {
+        .map(([, rows], idx) => {
           const best = rows.reduce((a, b) => a.minutes >= b.minutes ? a : b);
           const imp  = calcWeightedImportance(rows, best.season_year);
+          const isCurrentMain = idx === 0 && best.season_year === seasonYear;
           const posKey = best.nff_competition_id
             ? `${best.nff_team_id}_${best.season_year}_${best.nff_competition_id}`
             : `${best.nff_team_id}_${best.season_year}`;
@@ -1012,8 +1013,8 @@ export async function GET(req: Request) {
             goals:        rows.reduce((s, r) => s + r.goals, 0),
             yellow_cards: rows.reduce((s, r) => s + r.yellow_cards, 0),
             tier:         imp.tier,
-            importance:   imp.importance,
-            ceiling:      imp.ceiling,
+            importance: isCurrentMain ? importance : Math.min(imp.importance, importanceCeiling),
+            ceiling:    isCurrentMain ? importanceCeiling : Math.min(imp.ceiling, importanceCeiling),
             position:     posData?.position ?? null,
           };
         });
