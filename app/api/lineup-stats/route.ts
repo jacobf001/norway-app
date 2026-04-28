@@ -328,7 +328,7 @@ function bestTableRow(rows: TableRow[], teamId: string | null, preferCompId?: st
     if (!gender && (r.gender === "Youth_Male" || r.gender === "Youth_Female")) return false;
     return true;
   });
-  const source = leagueRows.length > 0 ? leagueRows : teamRows;
+  const source = leagueRows.length > 0 ? leagueRows : (gender ? [] : teamRows);
   if (preferCompId) {
     const compMatch = source.find(r => r.nff_competition_id === preferCompId);
     if (compMatch) return compMatch;
@@ -595,7 +595,9 @@ async function getLikelyXI(teamId: string, seasonYear: number, gender: string | 
     const mg = gender.toLowerCase();
     return rows.filter((r: any) => {
       const rg = (r.gender ?? "").toLowerCase();
-      if (mg === "male")   return rg === "male"   || rg === "youth_male"   || rg === "";
+      if (mg === "youth_male")   return rg === "youth_male";
+      if (mg === "youth_female") return rg === "youth_female";
+      if (mg === "male")   return rg === "male" || rg === "youth_male" || rg === "";
       if (mg === "female") return rg === "female" || rg === "youth_female";
       return true;
     });
@@ -872,8 +874,12 @@ export async function GET(req: Request) {
       }
 
       // Cap by side tier ceiling
+      // Cap by side tier ceiling
       const sideCeiling = tierBaseCeiling(sideTier, effectiveIsWomen);
-      importanceCeiling = Math.min(importanceCeiling, sideCeiling);
+      // For youth matches, always cap at youth tier ceiling regardless of senior history
+      const isYouthMatch = matchGender === "Youth_Male" || matchGender === "Youth_Female";
+      const effectiveSideCeiling = isYouthMatch ? Math.min(sideCeiling, 45) : sideCeiling;
+      importanceCeiling = Math.min(importanceCeiling, effectiveSideCeiling);
       importance        = Math.min(importance, importanceCeiling);
 
       // No current season evidence → cap at 10
@@ -968,6 +974,13 @@ export async function GET(req: Request) {
           }
         }
       } // end if (sideTier < 99)
+
+      // For youth matches, hard cap regardless of senior history
+      if (matchGender === "Youth_Male" || matchGender === "Youth_Female") {
+        const youthCap = tierBaseCeiling(sideTier, effectiveIsWomen);
+        importanceCeiling = Math.min(importanceCeiling, youthCap);
+        importance = Math.min(importance, importanceCeiling);
+      }
 
       // Build seasons for expandable row — all competitions this player appeared in
       const allRows = [...curRows, ...prevRows].filter(r => r.tier && r.tier < 90);
@@ -1068,7 +1081,13 @@ export async function GET(req: Request) {
       const sideCompId = side === "home"
         ? (homeCurTable?.nff_competition_id ?? compId)
         : (awayCurTable?.nff_competition_id ?? compId);
-      const likelyXI = await getLikelyXI(teamId, seasonYear, effectiveGender, sideCompId);
+      // Only use competition ID if it matches the match gender
+      const filteredCompId = sideCompId && matchGender
+        ? (side === "home" ? homeCurTable?.gender : awayCurTable?.gender) === matchGender
+          ? sideCompId
+          : compId
+        : sideCompId;
+      const likelyXI = await getLikelyXI(teamId, seasonYear, effectiveGender, filteredCompId);
       const sideLineup = side === "home" ? home : away;
       const presentIds = new Set([
         ...sideLineup.starters.map((p: any) => p.nff_player_id),
@@ -1154,8 +1173,8 @@ export async function GET(req: Request) {
     });
 
     const pricing = computeOdds({
-      homeTier: homeCurStr.tier ?? homeTier,
-      awayTier: awayCurStr.tier ?? awayTier,
+      homeTier: homeTier,
+      awayTier: awayTier,
       homeStrength: homeRating.effectiveStrength,
       awayStrength: awayRating.effectiveStrength,
       homeMissingImpact: homeMissing.missingImpact,
@@ -1184,8 +1203,8 @@ export async function GET(req: Request) {
     });
 
     const goalsModel = computeGoals({
-      homeTier: homeCurStr.tier ?? homeTier,
-      awayTier: awayCurStr.tier ?? awayTier,
+      homeTier: homeTier,
+      awayTier: awayTier,
       homeStrength: homeRating.effectiveStrength,
       awayStrength: awayRating.effectiveStrength,
       homeMissingGoals,
@@ -1226,8 +1245,8 @@ export async function GET(req: Request) {
       overall: { home: homeOverall, away: awayOverall },
       teamStrength: { home: homeRating.effectiveStrength, away: awayRating.effectiveStrength },
       teamStrengthDebug: {
-        home: { tier: homeDisplayTier, strength: homeStrength, position: homeCurStr.position, played: homeCurStr.played, points: homeCurStr.points, ppm: homeCurStr.ppm, competition_name: homeCurTable?.competition_name ?? homePrevTable?.competition_name ?? null },
-        away: { tier: awayDisplayTier, strength: awayStrength, position: awayCurStr.position, played: awayCurStr.played, points: awayCurStr.points, ppm: awayCurStr.ppm, competition_name: awayCurTable?.competition_name ?? awayPrevTable?.competition_name ?? null },
+        home: { tier: homeTier, strength: homeStrength, position: homeCurStr.position, played: homeCurStr.played, points: homeCurStr.points, ppm: homeCurStr.ppm, competition_name: matchComp?.name ?? homeCurTable?.competition_name ?? homePrevTable?.competition_name ?? null },
+        away: { tier: awayTier, strength: awayStrength, position: awayCurStr.position, played: awayCurStr.played, points: awayCurStr.points, ppm: awayCurStr.ppm, competition_name: matchComp?.name ?? awayCurTable?.competition_name ?? awayPrevTable?.competition_name ?? null },
       },
       ...pricing,
       goals: goalsModel,

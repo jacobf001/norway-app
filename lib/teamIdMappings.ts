@@ -47,6 +47,12 @@ export const TEAM_ID_MAPPINGS: Record<string, TeamSplit> = {
    "1118": {
     main: { id: "1691", name: "Byåsen TF" },
   },
+  "233": {
+    main:    { id: "3209", name: "Vålerenga" },
+    reserve: { id: "3209", name: "Vålerenga" },
+    youth:   { id: "3209", name: "Vålerenga" },
+    women:   { id: "233",  name: "Vålerenga Kvinner" },
+  },
 
   // Add more as discovered:
   // "LOGO_ID": {

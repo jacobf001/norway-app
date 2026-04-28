@@ -189,10 +189,14 @@ export async function GET(req: Request) {
 
     // Resolve team IDs: DB first, then mapping table, then logo ID
     const resolveId = (logoId: string | null, dbId: string | null) => {
+      // Always try mapping first — it may override the DB ID for youth/women context
+      const idToMap = dbId ?? logoId;
+      if (idToMap) {
+        const mapped = resolveTeamId(idToMap, compTier, compGender);
+        if (mapped) return mapped.id;
+      }
       if (dbId) return dbId;
-      if (!logoId) return logoId;
-      const mapped = resolveTeamId(logoId, compTier, compGender);
-      return mapped?.id ?? logoId;
+      return logoId;
     };
 
     const resolvedHomeId = resolveId(homeClubId, matchRow?.home_team_nff_id ? String(matchRow.home_team_nff_id) : null);
@@ -200,7 +204,13 @@ export async function GET(req: Request) {
 
     // Name-based fallback if logo ID didn't resolve
     const validateAndResolve = async (logoId: string | null, name: string | null, dbId: string | null): Promise<string | null> => {
-      // DB match ID takes priority always
+      // Check mapping first — may override DB ID for youth/women context
+      const idToMap = dbId ?? logoId;
+      if (idToMap) {
+        const mapped = resolveTeamId(idToMap, compTier, compGender);
+        if (mapped) return mapped.id;
+      }
+      // DB match ID takes priority
       if (dbId) return dbId;
 
       // If we have a logo ID, validate it matches the expected team name
@@ -247,10 +257,14 @@ export async function GET(req: Request) {
       return null;
     };
 
-    const [finalHomeId, finalAwayId] = await Promise.all([
+    const [rawHomeId, rawAwayId] = await Promise.all([
       validateAndResolve(homeClubId, homeName, matchRow?.home_team_nff_id ? String(matchRow.home_team_nff_id) : null),
       validateAndResolve(awayClubId, awayName, matchRow?.away_team_nff_id ? String(matchRow.away_team_nff_id) : null),
     ]);
+
+    // Apply team ID mappings based on competition context
+    const finalHomeId = rawHomeId ? (resolveTeamId(rawHomeId, compTier, compGender)?.id ?? rawHomeId) : rawHomeId;
+    const finalAwayId = rawAwayId ? (resolveTeamId(rawAwayId, compTier, compGender)?.id ?? rawAwayId) : rawAwayId;
 
     const teamNameMap = new Map<string, string>();
     if (finalHomeId || finalAwayId) {
@@ -269,6 +283,8 @@ export async function GET(req: Request) {
     const resolvedAwayName = awayName ?? (finalAwayId ? teamNameMap.get(finalAwayId) ?? null : null);
 
     console.log("DEBUG ids:", { homeClubId, awayClubId, finalHomeId, finalAwayId, homeName, awayName });
+    console.log("DEBUG finalIds after mapping:", { finalHomeId, finalAwayId, compTier, compGender });
+    console.log("DEBUG mapping test:", resolveTeamId('233', compTier, compGender));
 
     return NextResponse.json({
       fiksId,
