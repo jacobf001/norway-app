@@ -204,14 +204,15 @@ export async function GET(req: Request) {
 
     // Name-based fallback if logo ID didn't resolve
     const validateAndResolve = async (logoId: string | null, name: string | null, dbId: string | null): Promise<string | null> => {
-      // Check mapping first — may override DB ID for youth/women context
-      const idToMap = dbId ?? logoId;
-      if (idToMap) {
-        const mapped = resolveTeamId(idToMap, compTier, compGender);
-        if (mapped) return mapped.id;
+    const idToMap = dbId ?? logoId;
+    if (idToMap) {
+      const mapped = resolveTeamId(idToMap, compTier, compGender);
+      if (mapped) {
+        const mappedNameMatch = name && mapped.name.toLowerCase() === name.toLowerCase();
+        if (mappedNameMatch) return mapped.id;
       }
-      // DB match ID takes priority
-      if (dbId) return dbId;
+    }
+    if (dbId) return dbId;
 
       // If we have a logo ID, validate it matches the expected team name
       if (logoId) {

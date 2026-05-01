@@ -331,11 +331,15 @@ function bestTableRow(rows: TableRow[], teamId: string | null, preferCompId?: st
   const source = leagueRows.length > 0 ? leagueRows : (gender ? [] : teamRows);
   if (preferCompId) {
     const compMatch = source.find(r => r.nff_competition_id === preferCompId);
-    if (compMatch) return compMatch;
+    if (compMatch && Number(compMatch.played ?? 0) > 0) return compMatch;
   }
   if (preferTier) {
-    const tierMatch = source.find(r => r.tier === preferTier);
-    if (tierMatch) return tierMatch;
+    const tierMatches = source.filter(r => r.tier === preferTier);
+    if (tierMatches.length > 0) {
+      return tierMatches.reduce((best, r) => 
+        Number(r.played ?? 0) > Number(best.played ?? 0) ? r : best
+      );
+    }
   }
     // Instead of picking lowest tier, pick closest to preferTier
     return source.reduce((best, r) => {
@@ -975,11 +979,13 @@ export async function GET(req: Request) {
         }
       } // end if (sideTier < 99)
 
-      // For youth matches, hard cap regardless of senior history
+      // For youth matches, cap players without senior evidence above match tier
       if (matchGender === "Youth_Male" || matchGender === "Youth_Female") {
         const youthCap = tierBaseCeiling(sideTier, effectiveIsWomen);
-        importanceCeiling = Math.min(importanceCeiling, youthCap);
-        importance = Math.min(importance, importanceCeiling);
+        if (playerHighestTier >= sideTier) {
+          importanceCeiling = Math.min(importanceCeiling, youthCap);
+          importance = Math.min(importance, importanceCeiling);
+        }
       }
 
       // Build seasons for expandable row — all competitions this player appeared in
@@ -1245,8 +1251,24 @@ export async function GET(req: Request) {
       overall: { home: homeOverall, away: awayOverall },
       teamStrength: { home: homeRating.effectiveStrength, away: awayRating.effectiveStrength },
       teamStrengthDebug: {
-        home: { tier: homeTier, strength: homeStrength, position: homeCurStr.position, played: homeCurStr.played, points: homeCurStr.points, ppm: homeCurStr.ppm, competition_name: matchComp?.name ?? homeCurTable?.competition_name ?? homePrevTable?.competition_name ?? null },
-        away: { tier: awayTier, strength: awayStrength, position: awayCurStr.position, played: awayCurStr.played, points: awayCurStr.points, ppm: awayCurStr.ppm, competition_name: matchComp?.name ?? awayCurTable?.competition_name ?? awayPrevTable?.competition_name ?? null },
+        home: {
+          tier: homeTier,
+          strength: homeStrength,
+          position: homeCurStr.position,
+          played: homeCurStr.played,
+          points: homeCurStr.points,
+          ppm: homeCurStr.ppm,
+          competition_name: homeCurTable?.competition_name ?? homePrevTable?.competition_name ?? matchComp?.name ?? null,
+        },
+        away: {
+          tier: awayTier,
+          strength: awayStrength,
+          position: awayCurStr.position,
+          played: awayCurStr.played,
+          points: awayCurStr.points,
+          ppm: awayCurStr.ppm,
+          competition_name: awayCurTable?.competition_name ?? awayPrevTable?.competition_name ?? matchComp?.name ?? null,
+        },
       },
       ...pricing,
       goals: goalsModel,
